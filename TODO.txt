@@ -1,0 +1,304 @@
+Zarrs.jl — Remaining Work
+=========================
+
+1. ICECHUNK NAMESPACE REFACTOR
+------------------------------
+Move all Icechunk types into a `Zarrs.Icechunk` submodule so users write:
+
+    using Zarrs
+    using Zarrs.Icechunk
+
+    storage = S3Storage(bucket="...", prefix="...", region="us-west-2", anonymous=true)
+    repo = Repository(storage)
+    session = readonly_session(repo; branch="main")
+    g = zopen(session)
+
+Renames:
+    IcechunkS3Storage    -> Zarrs.Icechunk.S3Storage
+    IcechunkGCSStorage   -> Zarrs.Icechunk.GCSStorage
+    IcechunkAzureStorage -> Zarrs.Icechunk.AzureStorage
+    IcechunkLocalStorage -> Zarrs.Icechunk.LocalStorage
+    IcechunkMemoryStorage-> Zarrs.Icechunk.MemoryStorage
+    IcechunkRepository   -> Zarrs.Icechunk.Repository
+    IcechunkSession      -> Zarrs.Icechunk.Session
+
+Functions `readonly_session`, `writable_session`, `list_branches`, `list_tags`
+stay as-is (no prefix needed inside the submodule).
+
+`zopen(::Session)` should be defined in the submodule but extend `Zarrs.zopen`.
+
+Implementation:
+- Convert `src/icechunk.jl` to define `module Icechunk` inside the Zarrs module.
+- The submodule imports `Zarrs: zopen, ZarrsStorageHandle, ZarrsGroupHandle,
+  ZarrsArrayHandle, _open_array, _open_group, LibZarrs, JSON` from parent.
+- Remove `Icechunk*` exports from `Zarrs.jl`; the submodule exports its own names.
+- The icechunk:// shorthand in `create_storage` references `Icechunk.S3Storage` etc.
+- Update examples, tests, and docs to use `using Zarrs.Icechunk`.
+
+Keep `icechunk` as an optional Cargo feature in the Rust crate (already done).
+Long-term, consider making Icechunk a Julia package extension triggered by a
+lightweight `Icechunk_jll` weak dependency, so the Rust icechunk code only
+compiles/loads when needed. For now the submodule approach is fine since the
+feature is compiled into the shared library by default.
+
+
+2. ICECHUNK: WRITABLE SESSIONS & COMMIT
+----------------------------------------
+Enable writing data through Icechunk sessions and committing snapshots.
+
+Rust FFI additions needed (in deps/zarrs_jl/src/icechunk.rs):
+
+    zarrsIcechunkSessionCommit(session, message, pSnapshotId) -> ZarrsResult
+        - Acquires write lock on session_arc
+        - Calls session.commit(message, None).await
+        - Returns snapshot ID as a string
+
+    zarrsIcechunkSessionHasChanges(session, pHasChanges) -> ZarrsResult
+        - Calls session.has_uncommitted_changes()
+
+The icechunk Rust Session type has commit functionality but the exact API needs
+verification against icechunk 0.3.23. Check src/session.rs for:
+    - commit(message, properties) method signature
+    - Whether commit is on Session directly or requires going through Repository
+
+Julia API:
+
+    commit(session::Session, message::String) -> String  # returns snapshot ID
+    has_uncommitted_changes(session::Session) -> Bool
+
+Write workflow:
+    repo = Repository(S3Storage(...); mode=:open)
+    session = writable_session(repo, "main")
+    g = zopen(session)
+    # ... modify arrays ...
+    snapshot_id = commit(session, "Added temperature data")
+
+
+3. ICECHUNK: BRANCH & TAG MANAGEMENT
+-------------------------------------
+Expose repository-level version control operations.
+
+Rust FFI additions (in deps/zarrs_jl/src/icechunk.rs):
+
+    zarrsIcechunkRepoCreateBranch(repo, name, snapshot_id) -> ZarrsResult
+    zarrsIcechunkRepoDeleteBranch(repo, name) -> ZarrsResult
+    zarrsIcechunkRepoCreateTag(repo, name, snapshot_id) -> ZarrsResult
+    zarrsIcechunkRepoDeleteTag(repo, name) -> ZarrsResult
+    zarrsIcechunkRepoLookupBranch(repo, name, pSnapshotId) -> ZarrsResult
+    zarrsIcechunkRepoLookupTag(repo, name, pSnapshotId) -> ZarrsResult
+
+Julia API:
+
+    create_branch(repo, name, snapshot_id)
+    delete_branch(repo, name)
+    create_tag(repo, name, snapshot_id)
+    delete_tag(repo, name)
+    lookup_branch(repo, name) -> String   # snapshot ID
+    lookup_tag(repo, name) -> String      # snapshot ID
+
+list_branches and list_tags already exist.
+
+
+4. ICECHUNK: CREDENTIALS
+-------------------------
+Currently only anonymous and environment-based credentials are supported.
+Add static credential support for all backends.
+
+Rust changes: Accept credential parameters in the storage creation FFI functions.
+
+S3:
+    zarrsIcechunkS3Storage already accepts `anonymous`. Add:
+    - access_key_id, secret_access_key, session_token parameters (all *const c_char)
+    - If provided, use S3Credentials::Static(S3StaticCredentials { ... })
+    - If all null/empty and not anonymous, use S3Credentials::FromEnv (current default)
+
+GCS:
+    zarrsIcechunkGcsStorage: add credential_type + credential_value params.
+    - credential_type: 0=FromEnv (default), 1=Anonymous, 2=ServiceAccountPath,
+      3=ServiceAccountKey, 4=BearerToken
+    - credential_value: path or key string for types 2-4
+
+Azure:
+    zarrsIcechunkAzureStorage: add credential_type + credential_value params.
+    - credential_type: 0=FromEnv (default), 1=AccessKey, 2=SASToken, 3=BearerToken
+    - credential_value: the key/token string
+
+Julia storage types gain optional keyword arguments:
+
+    S3Storage(; bucket, prefix, region, anonymous,
+                access_key_id="", secret_access_key="", session_token="",
+                endpoint_url="", allow_http=false)
+
+    GCSStorage(; bucket, prefix,
+                 credentials=:from_env,   # or :anonymous, or a path/key string
+                 credential_type=:from_env)
+
+    AzureStorage(; account, container, prefix,
+                   credentials=:from_env,   # or access_key/sas_token/bearer string
+                   credential_type=:from_env)
+
+
+5. ICECHUNK: TESTS
+-------------------
+Add test coverage in test/test_icechunk.jl:
+
+a) Local filesystem Icechunk round-trip (no network needed):
+    - Create IcechunkLocalStorage in mktempdir()
+    - Repository(storage; mode=:create)
+    - writable_session -> create array -> write data -> commit
+    - readonly_session -> read data back -> verify
+    - Test branch/tag operations
+
+b) In-memory Icechunk round-trip:
+    - Same as above with IcechunkMemoryStorage
+
+c) S3 read-only test (network, skippable):
+    - Open dynamical HRRR dataset
+    - Verify variable count, shapes, data reads
+    - Test list_branches, list_tags
+
+d) Session lifecycle:
+    - Verify GC cleans up handles (no segfaults)
+    - Test that repo handle stays alive while session exists
+
+
+6. DIRECT S3/GCS/AZURE ZARR ACCESS (non-Icechunk)
+---------------------------------------------------
+Support reading plain Zarr stores on cloud storage (not Icechunk repos).
+This is for stores like s3://bucket/path/to/dataset.zarr that are regular
+Zarr V2/V3 stores, not Icechunk repositories.
+
+Rust: Add object_store-based storage backends.
+
+    zarrsCreateStorageS3(bucket, prefix, region, anonymous, pStorage) -> ZarrsResult
+        - Use object_store::aws::AmazonS3Builder
+        - Wrap with zarrs_object_store::AsyncObjectStore
+        - Bridge with AsyncToSyncStorageAdapter (same pattern as HTTP)
+
+    zarrsCreateStorageGCS(bucket, prefix, pStorage) -> ZarrsResult
+    zarrsCreateStorageAzure(account, container, prefix, pStorage) -> ZarrsResult
+
+Julia: Extend create_storage() to handle s3:// URLs (without icechunk=true)
+and gs:// / az:// URLs.
+
+Cargo.toml: Add object_store features: ["aws", "gcp", "azure"]
+(currently only "http" is enabled).
+
+This is lower priority since Icechunk covers most cloud use cases.
+
+
+7. CONSOLIDATED METADATA
+--------------------------
+Support reading .zmetadata (Zarr V2 consolidated metadata) for faster
+group enumeration over HTTP/S3 where list operations are expensive.
+
+When opening a group, check for .zmetadata at the store root. If present,
+parse it and use the pre-fetched metadata to open arrays and subgroups
+without individual metadata fetches.
+
+Implementation:
+- In _open_group(), after opening the group, try to read ".zmetadata" key.
+- If found, parse as JSON and cache array/group metadata.
+- When opening child arrays via getindex(g, key), check the cache first.
+- This is a pure Julia-side optimization; no Rust changes needed.
+
+Format of .zmetadata:
+    {
+      "metadata": {
+        ".zattrs": {...},
+        ".zgroup": {...},
+        "array_name/.zarray": {...},
+        "array_name/.zattrs": {...},
+        ...
+      }
+    }
+
+
+8. FILL VALUE HANDLING
+-----------------------
+Improve fill value support for edge cases:
+
+- NaN, Inf, -Inf fill values: Zarr V2 uses "NaN", "Infinity", "-Infinity"
+  strings in .zarray metadata. V3 uses JSON null or special strings.
+  build_v2_metadata and build_v3_metadata in utils.jl need to handle these.
+
+- String/bytes data type: Currently only numeric types are mapped. Add
+  support for variable-length strings (Zarr V2 vlen-utf8, V3 string type).
+  This requires extending ZARRS_DTYPE_TO_JULIA and the read/write paths.
+
+- Complex fill values: Ensure complex types (ComplexF32, ComplexF64) work
+  correctly with fill values in both V2 and V3 formats.
+
+Test: Add test cases in test/test_dtypes.jl for NaN/Inf fill values and
+verify round-trip correctness.
+
+
+9. DOCUMENTATION
+-----------------
+Update docs/ (Documenter.jl) with:
+
+a) Icechunk guide page (docs/src/icechunk.md):
+    - Overview of Icechunk concepts (repository, session, storage)
+    - Setup instructions per cloud provider
+    - Read workflow example
+    - Write + commit workflow example
+    - Branch/tag management example
+    - Credentials configuration
+
+b) Update API reference (docs/src/api.md):
+    - Add all Zarrs.Icechunk exported types and functions
+    - Organized by: Storage types, Repository, Session, Utilities
+
+c) Update getting_started.md:
+    - Add Icechunk section with minimal example
+    - Mention using Zarrs.Icechunk import pattern
+
+d) Add cloud storage page (docs/src/cloud.md):
+    - HTTP access (current)
+    - Icechunk (S3/GCS/Azure)
+    - Direct S3 access (when implemented)
+    - Limitations and troubleshooting
+
+
+10. BINARY DISTRIBUTION
+------------------------
+a) BinaryBuilder recipe (build_tarballs.jl):
+    - Test cross-compilation with icechunk feature enabled
+    - The icechunk dependency pulls in significant deps (object_store, tokio,
+      aws-sdk, etc.) — verify this compiles for all target triples
+    - May need to split into Zarrs_jll (core) and ZarrsIcechunk_jll (with icechunk)
+      if binary size or compile time is prohibitive
+
+b) CI updates (.github/workflows/ci.yml):
+    - Build with --features=icechunk (currently default)
+    - Add icechunk integration test job (requires network access)
+    - Test with and without icechunk feature to ensure core works standalone
+
+c) Julia General registry:
+    - Project.toml already has metadata (name, uuid, version, license, etc.)
+    - Need to finalize compat bounds for DiskArrays and JSON
+    - Register via JuliaRegistrator bot after tests are green in CI
+
+
+11. ASYNC / PARALLEL I/O
+--------------------------
+Currently all reads go through AsyncToSyncStorageAdapter which blocks on
+each async operation. For cloud storage, concurrent chunk fetches would
+significantly improve throughput.
+
+Options (in order of complexity):
+a) Thread-based parallelism in DiskArrays.readblock!: Use Julia's @spawn
+   to read multiple chunks concurrently. Each thread calls into the Rust
+   FFI (which is thread-safe since StorageHandle uses Arc).
+
+b) Rust-side batch reads: Add a zarrsArrayRetrieveSubsetAsync FFI function
+   that uses Rust's async runtime to fetch multiple chunks concurrently
+   and returns the assembled result.
+
+c) Full async storage: Expose the async Rust storage traits to Julia via
+   callbacks or a channel-based approach. Most complex, least likely needed.
+
+Option (a) is simplest and most impactful. DiskArrays already supports
+batch chunk reading — we just need to ensure thread safety of the FFI calls.
+The current Rust code uses Arc<dyn StorageTraits> which is Send+Sync,
+so concurrent reads from multiple Julia threads should work.
