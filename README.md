@@ -9,6 +9,8 @@ High-performance [Zarr](https://zarr.dev/) V2 and V3 arrays for Julia, powered b
 
 Zarrs.jl wraps a production-grade Rust Zarr implementation via C FFI, giving Julia users access to high-performance native codecs and the full Zarr V3 specification without reimplementing the format in pure Julia. This means a Rust toolchain is required to build the package.
 
+> **Note:** Zarrs.jl is **experimental**. If you are looking for a mature, battle-tested pure-Julia Zarr implementation, use [Zarr.jl](https://github.com/JuliaIO/Zarr.jl). Zarrs.jl exists to explore what a Rust-backed FFI approach can offer (V3 support, sharding, high-performance codecs) but it is new and much less tested than Zarr.jl.
+
 ## Features
 
 - **Zarr V3 and V2** — Full support for both specification versions
@@ -18,6 +20,7 @@ Zarrs.jl wraps a production-grade Rust Zarr implementation via C FFI, giving Jul
 - **14 numeric types** — Bool, Int8–Int64, UInt8–UInt64, Float16/32/64, ComplexF32/64
 - **Cloud read/write** — Direct S3 and GCS access via `s3://` and `gs://` URLs
 - **HTTP/HTTPS read access** — Read remote Zarr arrays over HTTP
+- **Consolidated metadata** — V2 (`.zmetadata`) and V3 (inline `consolidated_metadata`) for efficient HTTP access
 - **Groups with attributes** — Hierarchical data organization
 - **[URL pipeline](https://github.com/jbms/url-pipeline) syntax** — Composable store URLs with `|` delimiter
 - **Icechunk integration** — Versioned cloud storage on S3, GCS, and Azure
@@ -108,4 +111,5 @@ Dual-licensed under [MIT](LICENSE) and Apache-2.0.
 
 ## Acknowledgements
 
-Built on the [zarrs](https://github.com/zarrs/zarrs) Rust library by LDeakin.
+- [Zarr.jl](https://github.com/JuliaIO/Zarr.jl) — The established pure-Julia Zarr implementation
+- [zarrs](https://github.com/zarrs/zarrs) — The Rust Zarr library by LDeakin that powers this package
