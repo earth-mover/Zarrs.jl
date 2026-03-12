@@ -65,17 +65,23 @@ println(eltype(z))    # Float32
 data = z[:, :]
 ```
 
-### Remote HTTP Access
+### Remote Access
 
-Open Zarr arrays served over HTTP/HTTPS:
+Open Zarr arrays from remote backends:
 
 ```julia
+# HTTP/HTTPS (read-only)
 z = zopen("https://data.example.com/dataset.zarr")
 subset = z[1:10, 1:10]
+
+# S3 (read/write)
+z = zopen("s3://my-bucket/data.zarr"; region="us-west-2")
+
+# GCS (read/write)
+z = zopen("gs://my-bucket/data.zarr")
 ```
 
-!!! note
-    HTTP storage is read-only. Attempting to write will result in an error.
+See [Cloud & Remote Access](@ref) for full details on cloud backends and credentials.
 
 ## Groups
 
@@ -110,22 +116,22 @@ println(attrs["units"])  # "kelvin"
 
 ## Icechunk (Cloud Versioned Storage)
 
-Read and write versioned Zarr data on cloud object stores using Icechunk:
+Read versioned Zarr data using the URL pipeline syntax:
+
+```julia
+using Zarrs
+
+# Read from Icechunk on S3 via URL pipeline
+g = zopen("s3://my-bucket/my-repo|icechunk://branch.main/"; region="us-west-2")
+data = g["temperature"][:, :, 1]
+```
+
+For write access, use the full `Zarrs.Icechunk` API:
 
 ```julia
 using Zarrs
 using Zarrs.Icechunk
 
-# Open an existing Icechunk repository on S3
-storage = S3Storage(bucket="my-bucket", prefix="my-repo", region="us-west-2")
-repo = Repository(storage)
-session = readonly_session(repo; branch="main")
-g = zopen(session)
-data = g["temperature"][:, :, 1]
-```
-
-For writing:
-```julia
 repo = Repository(MemoryStorage(); mode=:create)
 session = writable_session(repo, "main")
 # ... create arrays and write data ...

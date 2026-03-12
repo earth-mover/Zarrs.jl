@@ -14,7 +14,7 @@ icechunk = ["dep:icechunk"]
 zarrs = { version = "0.23", features = ["filesystem"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["http"] }
-object_store = { version = "0.13", features = ["http"] }
+object_store = { version = "0.13", features = ["http", "aws", "gcp"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 icechunk = { version = "0.3", optional = true }
 async-trait = "0.1"

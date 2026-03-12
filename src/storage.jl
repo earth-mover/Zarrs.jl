@@ -64,49 +64,119 @@ mutable struct ZarrsGroupHandle
 end
 
 # ---------------------------------------------------------------------------
-# Storage creation
+# Storage creation — URL pipeline dispatch
 # ---------------------------------------------------------------------------
 
 """
     create_storage(path::AbstractString; kwargs...) -> ZarrsStorageHandle
 
-Create a storage handle for the given path or URL.
-Supports filesystem paths, HTTP/HTTPS URLs, and Icechunk S3 stores.
+Create a storage handle from a URL pipeline string.
 
-For Icechunk stores, use `icechunk://bucket/prefix` or pass `s3://bucket/prefix`
-with `icechunk=true`.
+Supports the [URL pipeline](https://github.com/jbms/url-pipeline) syntax
+where stages are separated by `|`.
+
+# Root schemes (direct access, read/write)
+- `"/path/to/store"` or `"file:///path"` — local filesystem
+- `"s3://bucket/prefix"` — Amazon S3
+- `"gs://bucket/prefix"` — Google Cloud Storage
+- `"http://..."` / `"https://..."` — HTTP (read-only)
+
+# Adapter schemes
+- `"| icechunk:"` — Icechunk versioned storage (read-only via pipeline)
+- `"| icechunk://branch.main/"` — specific branch
+- `"| icechunk://tag.v1/"` — specific tag
+
+# Examples
+```julia
+# Direct access
+create_storage("/tmp/data.zarr")
+create_storage("s3://bucket/data.zarr")
+create_storage("gs://bucket/data.zarr")
+create_storage("https://example.com/data.zarr")
+
+# Icechunk over S3
+create_storage("s3://bucket/repo|icechunk://branch.main/")
+
+# Icechunk over memory (for testing)
+create_storage("memory:|icechunk:")
+```
 
 # Keyword Arguments
-- `anonymous::Bool=false`: Use anonymous credentials for S3/Icechunk.
-- `region::String=""`: AWS region for S3/Icechunk.
-- `branch::String="main"`: Icechunk branch to read.
-- `icechunk::Bool=false`: Force Icechunk mode for S3 URLs.
+- `anonymous::Bool=false`: Use anonymous credentials for S3/GCS.
+- `region::String=""`: AWS region for S3.
+- `endpoint_url::String=""`: Custom endpoint URL for S3-compatible services.
 """
 function create_storage(path::AbstractString;
                         anonymous::Bool=false,
                         region::String="",
-                        branch::String="main",
-                        icechunk::Bool=false)
-    if startswith(path, "icechunk://") || (startswith(path, "s3://") && icechunk)
-        # Convenience shorthand: create S3Storage + Repository + readonly_session
-        scheme = startswith(path, "icechunk://") ? "icechunk://" : "s3://"
-        rest = path[length(scheme) + 1:end]
-        bucket, prefix = _split_s3_path(rest)
-        storage = Icechunk.S3Storage(bucket=bucket, prefix=prefix, region=region, anonymous=anonymous)
-        repo = Icechunk.Repository(storage)
-        session = Icechunk.readonly_session(repo; branch=branch)
-        return session.zarrs_storage
-    elseif startswith(path, "http://") || startswith(path, "https://")
-        ptr = LibZarrs.zarrs_create_storage_http(path)
+                        endpoint_url::String="")
+    pipeline = parse_url_pipeline(path)
+
+    if has_adapter(pipeline, :icechunk)
+        return _create_icechunk_storage(pipeline; anonymous, region)
     else
-        ptr = LibZarrs.zarrs_create_storage_filesystem(path)
+        return _create_direct_storage(pipeline; anonymous, region, endpoint_url)
+    end
+end
+
+function _create_direct_storage(pipeline::URLPipeline;
+                                anonymous::Bool=false,
+                                region::String="",
+                                endpoint_url::String="")
+    root = pipeline.root
+    # Allow query params to override kwargs
+    region = get(root.query, "region", region)
+    endpoint_url = get(root.query, "endpoint_url", endpoint_url)
+    anon = haskey(root.query, "anonymous") ? root.query["anonymous"] == "true" : anonymous
+
+    if root.scheme === :file
+        ptr = LibZarrs.zarrs_create_storage_filesystem(root.prefix)
+    elseif root.scheme === :s3
+        ptr = LibZarrs.zarrs_create_storage_s3(root.bucket, root.prefix, region, endpoint_url, anon)
+    elseif root.scheme === :gs
+        ptr = LibZarrs.zarrs_create_storage_gcs(root.bucket, root.prefix, anon)
+    elseif root.scheme === :http || root.scheme === :https
+        ptr = LibZarrs.zarrs_create_storage_http(root.prefix)
+    elseif root.scheme === :memory
+        error("memory: scheme requires an adapter (e.g. \"memory:|icechunk:\")")
+    else
+        error("Unsupported root scheme: $(root.scheme)")
     end
     return ZarrsStorageHandle(ptr)
 end
 
-function _split_s3_path(path::AbstractString)
-    parts = split(path, '/'; limit=2)
-    bucket = String(parts[1])
-    prefix = length(parts) > 1 ? String(parts[2]) : ""
-    return bucket, prefix
+function _create_icechunk_storage(pipeline::URLPipeline;
+                                  anonymous::Bool=false,
+                                  region::String="")
+    root = pipeline.root
+    adapter = get_adapter(pipeline, :icechunk)
+
+    # Parse version from Icechunk authority
+    version_type, version_name = parse_icechunk_authority(adapter.authority)
+
+    # Allow query params to override kwargs
+    region = get(root.query, "region", region)
+    anon = haskey(root.query, "anonymous") ? root.query["anonymous"] == "true" : anonymous
+
+    # Create Icechunk storage config from root scheme
+    ic_storage = if root.scheme === :s3
+        Icechunk.S3Storage(bucket=root.bucket, prefix=root.prefix, region=region, anonymous=anon)
+    elseif root.scheme === :gs
+        cred_type = anon ? :anonymous : :from_env
+        Icechunk.GCSStorage(bucket=root.bucket, prefix=root.prefix, credential_type=cred_type)
+    elseif root.scheme === :file
+        Icechunk.LocalStorage(root.prefix)
+    elseif root.scheme === :memory
+        Icechunk.MemoryStorage()
+    else
+        error("Icechunk adapter does not support root scheme: $(root.scheme)")
+    end
+
+    repo = Icechunk.Repository(ic_storage)
+    session = if version_type === :branch
+        Icechunk.readonly_session(repo; branch=version_name)
+    else
+        Icechunk.readonly_session(repo; tag=version_name)
+    end
+    return session.zarrs_storage
 end

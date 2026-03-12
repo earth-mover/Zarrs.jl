@@ -84,6 +84,18 @@ Zarrs.ZarrsArrayHandle
 Zarrs.ZarrsGroupHandle
 ```
 
+## URL Pipeline
+
+```@docs
+Zarrs.parse_url_pipeline
+Zarrs.URLPipeline
+Zarrs.RootScheme
+Zarrs.AdapterScheme
+Zarrs.has_adapter
+Zarrs.get_adapter
+Zarrs.parse_icechunk_authority
+```
+
 ## Internals
 
 ```@docs

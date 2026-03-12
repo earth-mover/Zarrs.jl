@@ -6,6 +6,10 @@ using Zarrs
 requested = ARGS
 
 @testset "Zarrs.jl" begin
+    if isempty(requested) || "url_pipeline" in requested || "core" in requested
+        include("test_url_pipeline.jl")
+    end
+
     if isempty(requested) || "core" in requested
         include("test_array.jl")
         include("test_dtypes.jl")

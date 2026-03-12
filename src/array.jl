@@ -68,16 +68,31 @@ end
 """
     zopen(path::AbstractString; kwargs...) -> ZarrsArray{T,N} or ZarrsGroup
 
-Open an existing Zarr array or group at `path`. Auto-detects V2/V3 format.
+Open an existing Zarr array or group. Auto-detects V2/V3 format.
 
-Supports filesystem paths, HTTP/HTTPS URLs, and Icechunk S3 stores.
-For Icechunk, use `icechunk://bucket/prefix` or `s3://bucket/prefix` with `icechunk=true`.
+`path` is a [URL pipeline](https://github.com/jbms/url-pipeline) string:
+
+```julia
+# Local filesystem
+zopen("/tmp/data.zarr")
+
+# HTTP (read-only)
+zopen("https://example.com/data.zarr")
+
+# S3 (read/write)
+zopen("s3://bucket/data.zarr")
+
+# GCS (read/write)
+zopen("gs://bucket/data.zarr")
+
+# Icechunk over S3 (read-only)
+zopen("s3://bucket/repo|icechunk://branch.main/")
+```
 
 # Keyword Arguments
-- `anonymous::Bool=false`: Use anonymous S3 credentials.
+- `anonymous::Bool=false`: Use anonymous credentials for S3/GCS.
 - `region::String=""`: AWS region for S3.
-- `branch::String="main"`: Icechunk branch to read.
-- `icechunk::Bool=false`: Force Icechunk mode for `s3://` URLs.
+- `endpoint_url::String=""`: Custom S3 endpoint URL.
 """
 function zopen(path::AbstractString; kwargs...)
     storage = create_storage(path; kwargs...)

@@ -16,8 +16,10 @@ Zarrs.jl wraps a production-grade Rust Zarr implementation via C FFI, giving Jul
 - **Sharding** — Native support for the Zarr V3 sharding codec
 - **DiskArrays.jl integration** — Standard Julia array interface with lazy, chunked I/O
 - **14 numeric types** — Bool, Int8–Int64, UInt8–UInt64, Float16/32/64, ComplexF32/64
+- **Cloud read/write** — Direct S3 and GCS access via `s3://` and `gs://` URLs
 - **HTTP/HTTPS read access** — Read remote Zarr arrays over HTTP
 - **Groups with attributes** — Hierarchical data organization
+- **[URL pipeline](https://github.com/jbms/url-pipeline) syntax** — Composable store URLs with `|` delimiter
 - **Icechunk integration** — Versioned cloud storage on S3, GCS, and Azure
 
 ## Installation
@@ -46,30 +48,37 @@ data = z[1:50, 1:50]
 # Open an existing array
 z2 = zopen("/tmp/my.zarr")
 
-# Read a remote array over HTTP
-z3 = zopen("https://example.com/data.zarr")
+# Cloud access (S3, GCS)
+z3 = zopen("s3://my-bucket/data.zarr"; region="us-west-2")
+z4 = zopen("gs://my-bucket/data.zarr")
+
+# HTTP (read-only)
+z5 = zopen("https://example.com/data.zarr")
 ```
 
 ## Icechunk
 
-[Icechunk](https://icechunk.io) adds Git-like version control (branches, tags, commits) to Zarr datasets on cloud object stores:
+[Icechunk](https://icechunk.io) adds Git-like version control (branches, tags, commits) to Zarr datasets on cloud object stores. Use the [URL pipeline](https://github.com/jbms/url-pipeline) syntax for read access:
 
 ```julia
 using Zarrs
+
+# Read Icechunk repo on S3 — branch "main"
+g = zopen("s3://bucket/repo|icechunk://branch.main/"; region="us-west-2")
+
+# Read a specific tag
+g = zopen("s3://bucket/repo|icechunk://tag.v1/"; region="us-west-2")
+```
+
+For write access (commits, branching), use the full `Zarrs.Icechunk` API:
+
+```julia
 using Zarrs.Icechunk
 
-# Create an in-memory repository
-storage = MemoryStorage()
-repo = Repository(storage; mode=:create)
-
-# Write data on a branch
+repo = Repository(MemoryStorage(); mode=:create)
 session = writable_session(repo, "main")
 # ... create arrays and write data ...
 snapshot_id = commit(session, "initial data")
-
-# Read data back
-session = readonly_session(repo; tag="v1.0")
-g = zopen(session)
 ```
 
 See the [Icechunk documentation](https://earth-mover.github.io/Zarrs.jl/stable/icechunk/) for full details on storage backends, credentials, branches, and tags.

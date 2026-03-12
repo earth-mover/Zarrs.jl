@@ -80,6 +80,35 @@ function zarrs_create_storage_http(url::AbstractString)
     return storage_ptr[]
 end
 
+function zarrs_create_storage_s3(bucket::AbstractString, prefix::AbstractString,
+                                  region::AbstractString, endpoint_url::AbstractString,
+                                  anonymous::Bool)
+    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsCreateStorageS3(
+        bucket::Cstring,
+        prefix::Cstring,
+        region::Cstring,
+        endpoint_url::Cstring,
+        Cint(anonymous)::Cint,
+        storage_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return storage_ptr[]
+end
+
+function zarrs_create_storage_gcs(bucket::AbstractString, prefix::AbstractString,
+                                   anonymous::Bool)
+    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsCreateStorageGCS(
+        bucket::Cstring,
+        prefix::Cstring,
+        Cint(anonymous)::Cint,
+        storage_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return storage_ptr[]
+end
+
 function zarrs_destroy_storage(storage::Ptr{Cvoid})
     result = @ccall libzarrs_jl[].zarrsDestroyStorage(
         storage::Ptr{Cvoid}

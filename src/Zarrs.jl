@@ -6,6 +6,7 @@ import JSON
 include("LibZarrs.jl")
 include("types.jl")
 include("utils.jl")
+include("url_pipeline.jl")
 include("storage.jl")
 include("array.jl")
 include("group.jl")

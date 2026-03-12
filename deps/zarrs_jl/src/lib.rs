@@ -10,6 +10,7 @@ use zarrs::array::{Array, ArrayMetadata, ArrayBytes};
 use zarrs::group::Group;
 use zarrs::storage::ReadableWritableListableStorageTraits;
 use zarrs_storage::storage_adapter::async_to_sync::{AsyncToSyncBlockOn, AsyncToSyncStorageAdapter};
+use object_store::prefix::PrefixStore;
 
 // ---------------------------------------------------------------------------
 // Error handling
@@ -154,6 +155,161 @@ pub unsafe extern "C" fn zarrsCreateStorageHTTP(
     };
 
     let async_store = Arc::new(zarrs_object_store::AsyncObjectStore::new(http_store));
+    let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(runtime)));
+
+    let handle = Box::new(StorageHandle {
+        store: sync_store,
+    });
+    unsafe { *pStorage = Box::into_raw(handle) };
+    ZarrsResult::ZARRS_SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// Storage — S3 (read/write via object_store)
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsCreateStorageS3(
+    bucket: *const c_char,
+    prefix: *const c_char,
+    region: *const c_char,
+    endpoint_url: *const c_char,
+    anonymous: i32,
+    pStorage: *mut *mut StorageHandle,
+) -> ZarrsResult {
+    if pStorage.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+
+    let bucket_str = match str_from_ptr(bucket) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let prefix_str = if prefix.is_null() {
+        ""
+    } else {
+        match str_from_ptr(prefix) {
+            Ok(s) => s,
+            Err(r) => return r,
+        }
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_error(format!("Failed to create tokio runtime: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let mut builder = object_store::aws::AmazonS3Builder::new()
+        .with_bucket_name(bucket_str);
+
+    if !region.is_null() {
+        if let Ok(r) = str_from_ptr(region) {
+            if !r.is_empty() {
+                builder = builder.with_region(r);
+            }
+        }
+    }
+
+    if !endpoint_url.is_null() {
+        if let Ok(ep) = str_from_ptr(endpoint_url) {
+            if !ep.is_empty() {
+                builder = builder.with_endpoint(ep);
+            }
+        }
+    }
+
+    if anonymous != 0 {
+        builder = builder.with_skip_signature(true);
+    }
+
+    let s3_store = match builder.build() {
+        Ok(store) => store,
+        Err(e) => {
+            set_error(format!("Failed to create S3 store: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    // Wrap with prefix if provided
+    let object_store: Arc<dyn object_store::ObjectStore> = if prefix_str.is_empty() {
+        Arc::new(s3_store)
+    } else {
+        let prefix = object_store::path::Path::from(prefix_str);
+        Arc::new(PrefixStore::new(s3_store, prefix))
+    };
+
+    let async_store = Arc::new(zarrs_object_store::AsyncObjectStore::new(object_store));
+    let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(runtime)));
+
+    let handle = Box::new(StorageHandle {
+        store: sync_store,
+    });
+    unsafe { *pStorage = Box::into_raw(handle) };
+    ZarrsResult::ZARRS_SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// Storage — GCS (read/write via object_store)
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsCreateStorageGCS(
+    bucket: *const c_char,
+    prefix: *const c_char,
+    anonymous: i32,
+    pStorage: *mut *mut StorageHandle,
+) -> ZarrsResult {
+    if pStorage.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+
+    let bucket_str = match str_from_ptr(bucket) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let prefix_str = if prefix.is_null() {
+        ""
+    } else {
+        match str_from_ptr(prefix) {
+            Ok(s) => s,
+            Err(r) => return r,
+        }
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_error(format!("Failed to create tokio runtime: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let mut builder = object_store::gcp::GoogleCloudStorageBuilder::new()
+        .with_bucket_name(bucket_str);
+
+    if anonymous != 0 {
+        builder = builder.with_skip_signature(true);
+    }
+
+    let gcs_store = match builder.build() {
+        Ok(store) => store,
+        Err(e) => {
+            set_error(format!("Failed to create GCS store: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let object_store: Arc<dyn object_store::ObjectStore> = if prefix_str.is_empty() {
+        Arc::new(gcs_store)
+    } else {
+        let prefix = object_store::path::Path::from(prefix_str);
+        Arc::new(PrefixStore::new(gcs_store, prefix))
+    };
+
+    let async_store = Arc::new(zarrs_object_store::AsyncObjectStore::new(object_store));
     let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(runtime)));
 
     let handle = Box::new(StorageHandle {
