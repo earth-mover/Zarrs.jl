@@ -32,6 +32,10 @@ requested = ARGS
         include("test_compat_zarr_jl.jl")
     end
 
+    if isempty(requested) || "consolidated" in requested
+        include("test_consolidated.jl")
+    end
+
     if isempty(requested) || "http" in requested
         include("test_http.jl")
     end

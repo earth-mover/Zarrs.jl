@@ -1633,6 +1633,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2729,6 +2730,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3921,6 +3923,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4429,12 +4440,16 @@ name = "zarrs_jl"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
+ "chrono",
  "futures",
  "icechunk",
  "object_store",
  "once_cell",
+ "reqwest",
  "serde_json",
  "tokio",
+ "url",
  "zarrs",
  "zarrs_object_store",
  "zarrs_storage",

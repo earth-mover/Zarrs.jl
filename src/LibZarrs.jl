@@ -456,6 +456,22 @@ function zarrs_jl_array_resize(storage::Ptr{Cvoid}, path::AbstractString, new_sh
     check_error(result)
 end
 
+function zarrs_jl_storage_get(storage::Ptr{Cvoid}, key::AbstractString)
+    data_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsJlStorageGet(
+        storage::Ptr{Cvoid},
+        key::Cstring,
+        data_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    if data_ptr[] == C_NULL
+        return nothing
+    end
+    s = unsafe_string(data_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(data_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
 function zarrs_jl_storage_list_dir(storage::Ptr{Cvoid}, path::AbstractString)
     json_ptr = Ref{Ptr{UInt8}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsJlStorageListDir(

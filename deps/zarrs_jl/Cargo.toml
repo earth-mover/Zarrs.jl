@@ -18,9 +18,13 @@ object_store = { version = "0.13", features = ["http", "aws", "gcp"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 icechunk = { version = "0.3", optional = true }
 async-trait = "0.1"
+bytes = "1"
+chrono = "0.4"
 futures = "0.3"
 once_cell = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde_json = "1"
+url = "2"
 
 [profile.release]
 lto = true

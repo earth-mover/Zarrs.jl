@@ -44,6 +44,13 @@ end
 List child array and group names.
 """
 function Base.keys(g::ZarrsGroup)
+    # Try consolidated metadata first
+    cm = g.storage.consolidated
+    if cm isa Dict
+        return _keys_from_consolidated(cm, g.zarr_path)
+    end
+
+    # Fallback: list directory via storage
     prefix = g.zarr_path == "/" ? "/" : "$(g.zarr_path)/"
     json_str = LibZarrs.zarrs_jl_storage_list_dir(g.storage.ptr, prefix)
     children = JSON.parse(json_str)
@@ -57,6 +64,28 @@ function Base.keys(g::ZarrsGroup)
         end
     end
     return result
+end
+
+"""
+    _keys_from_consolidated(metadata::Dict, zarr_path::AbstractString) -> Vector{String}
+
+Extract direct child names from consolidated metadata for the given zarr path.
+"""
+function _keys_from_consolidated(metadata::Dict, zarr_path::AbstractString)
+    prefix = zarr_path == "/" ? "" : lstrip(zarr_path, '/') * "/"
+    children = Set{String}()
+    for key in keys(metadata)
+        if startswith(key, prefix) && key != prefix
+            rest = key[length(prefix)+1:end]
+            slash_idx = findfirst('/', rest)
+            child = slash_idx === nothing ? rest : rest[1:slash_idx-1]
+            # Skip metadata file names
+            if !startswith(child, ".") && child != "zarr.json"
+                push!(children, child)
+            end
+        end
+    end
+    return sort!(collect(children))
 end
 
 Base.haskey(g::ZarrsGroup, key::AbstractString) = key in keys(g)
@@ -84,6 +113,11 @@ end
 # ---------------------------------------------------------------------------
 
 function _open_group(storage::ZarrsStorageHandle, group_path::AbstractString, store_path::String)
+    # Attempt to load consolidated metadata when opening the root group
+    if group_path == "/" && storage.consolidated === missing
+        _try_load_consolidated!(storage)
+    end
+
     group_ptr = LibZarrs.zarrs_open_group_rw(storage.ptr, group_path)
     handle = ZarrsGroupHandle(group_ptr, storage)
 

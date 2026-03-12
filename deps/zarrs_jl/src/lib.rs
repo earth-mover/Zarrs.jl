@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
+mod http_store;
+
 use std::ffi::{CStr, CString, c_char};
 use std::slice;
 use std::sync::{Arc, Mutex};
@@ -8,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use zarrs::array::{Array, ArrayMetadata, ArrayBytes};
 use zarrs::group::Group;
-use zarrs::storage::ReadableWritableListableStorageTraits;
+use zarrs::storage::{ReadableStorageTraits, ReadableWritableListableStorageTraits};
 use zarrs_storage::storage_adapter::async_to_sync::{AsyncToSyncBlockOn, AsyncToSyncStorageAdapter};
 use object_store::prefix::PrefixStore;
 
@@ -141,12 +143,7 @@ pub unsafe extern "C" fn zarrsCreateStorageHTTP(
         }
     };
 
-    let options = object_store::ClientOptions::new().with_allow_http(true);
-    let http_store = match object_store::http::HttpBuilder::new()
-        .with_url(url_str)
-        .with_client_options(options)
-        .build()
-    {
+    let http_store = match http_store::SimpleHttpStore::new(url_str) {
         Ok(store) => store,
         Err(e) => {
             set_error(format!("Failed to create HTTP store: {e}"));
@@ -1140,6 +1137,55 @@ pub unsafe extern "C" fn zarrsJlStorageListDir(
                     ZarrsResult::ZARRS_ERROR_STORAGE
                 }
             }
+        }
+        Err(e) => {
+            set_error(e.to_string());
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// Read a single key from storage, returning its bytes as a C string.
+/// Returns ZARRS_SUCCESS with null output if the key is not found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsJlStorageGet(
+    storage: *mut StorageHandle,
+    key: *const c_char,
+    data_out: *mut *mut c_char,
+) -> ZarrsResult {
+    if storage.is_null() || data_out.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let key_str = match str_from_ptr(key) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let store = unsafe { &*storage }.store.clone();
+
+    let store_key = match zarrs::storage::StoreKey::new(key_str) {
+        Ok(k) => k,
+        Err(e) => {
+            set_error(e.to_string());
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    match store.get(&store_key) {
+        Ok(Some(bytes)) => {
+            match CString::new(bytes.to_vec()) {
+                Ok(cstr) => {
+                    unsafe { *data_out = cstr.into_raw() };
+                    ZarrsResult::ZARRS_SUCCESS
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    ZarrsResult::ZARRS_ERROR_STORAGE
+                }
+            }
+        }
+        Ok(None) => {
+            unsafe { *data_out = std::ptr::null_mut() };
+            ZarrsResult::ZARRS_SUCCESS
         }
         Err(e) => {
             set_error(e.to_string());

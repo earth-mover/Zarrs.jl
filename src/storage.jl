@@ -9,8 +9,9 @@ Opaque wrapper around a zarrs storage pointer. Automatically freed on GC.
 """
 mutable struct ZarrsStorageHandle
     ptr::Ptr{Cvoid}
+    consolidated::Any  # missing = not attempted, nothing = attempted but not found, Dict = found
     function ZarrsStorageHandle(ptr::Ptr{Cvoid})
-        h = new(ptr)
+        h = new(ptr, missing)
         finalizer(h) do h
             if h.ptr != C_NULL
                 LibZarrs.zarrs_destroy_storage(h.ptr)
@@ -19,6 +20,75 @@ mutable struct ZarrsStorageHandle
         end
         return h
     end
+end
+
+"""
+    _try_load_consolidated!(storage::ZarrsStorageHandle)
+
+Attempt to load consolidated metadata from the store. Tries V3 `zarr.json`
+(with inline `consolidated_metadata`) first, then V2 `.zmetadata`.
+Sets `storage.consolidated` to a `Dict` if found, `nothing` if not found or invalid.
+"""
+function _try_load_consolidated!(storage::ZarrsStorageHandle)
+    storage.consolidated !== missing && return  # already loaded or attempted
+
+    # Try V3 consolidated metadata from zarr.json
+    v3_content = LibZarrs.zarrs_jl_storage_get(storage.ptr, "zarr.json")
+    if v3_content !== nothing
+        try
+            parsed = JSON.parse(v3_content)
+            if parsed isa AbstractDict && haskey(parsed, "consolidated_metadata")
+                cm = parsed["consolidated_metadata"]
+                if cm isa AbstractDict && haskey(cm, "metadata")
+                    storage.consolidated = _flatten_v3_consolidated(cm["metadata"])
+                    return
+                end
+            end
+        catch
+            # Invalid JSON — fall through
+        end
+    end
+
+    # Try V2 consolidated metadata from .zmetadata
+    v2_content = LibZarrs.zarrs_jl_storage_get(storage.ptr, ".zmetadata")
+    if v2_content !== nothing
+        try
+            parsed = JSON.parse(v2_content)
+            if parsed isa AbstractDict && haskey(parsed, "metadata")
+                storage.consolidated = Dict{String,Any}(parsed["metadata"])
+                return
+            end
+        catch
+            # Invalid JSON — fall through
+        end
+    end
+
+    storage.consolidated = nothing
+end
+
+"""
+    _flatten_v3_consolidated(metadata) -> Dict{String,Any}
+
+Flatten V3 consolidated metadata (which uses nested path keys mapping to node
+metadata) into V2-style flat keys for use with `_keys_from_consolidated`.
+
+V3 consolidated metadata has the form:
+    {"child_name" => {"zarr_format" => 3, "node_type" => "array", ...}, ...}
+
+We convert to flat keys like:
+    {"child_name/zarr.json" => ..., "child_name/nested/zarr.json" => ...}
+"""
+function _flatten_v3_consolidated(metadata::Any)
+    result = Dict{String,Any}()
+    if !(metadata isa AbstractDict)
+        return result
+    end
+    for (path, node_meta) in metadata
+        # Each key is a relative path (e.g. "temperature" or "nested/data")
+        # and the value is the node metadata
+        result["$path/zarr.json"] = node_meta
+    end
+    return result
 end
 
 """
