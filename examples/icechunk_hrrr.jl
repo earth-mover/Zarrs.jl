@@ -11,10 +11,24 @@
 
 using Zarrs
 
-const STORE = "icechunk://dynamical-noaa-hrrr/noaa-hrrr-forecast-48-hour/v0.1.0.icechunk"
+# --- Connect to the Icechunk repository ---
+# Step 1: Configure S3 storage pointing to the Icechunk repo
+storage = IcechunkS3Storage(
+    bucket    = "dynamical-noaa-hrrr",
+    prefix    = "noaa-hrrr-forecast-48-hour/v0.1.0.icechunk",
+    region    = "us-west-2",
+    anonymous = true,
+)
 
-println("Opening Icechunk store: $STORE")
-g = zopen(STORE; anonymous=true, region="us-west-2")
+# Step 2: Open the repository
+println("Opening Icechunk repository...")
+repo = IcechunkRepository(storage)
+
+# Step 3: Create a read-only session on the main branch
+session = readonly_session(repo; branch="main")
+
+# Step 4: Open the Zarr data through the session
+g = zopen(session)
 println("  $(length(keys(g))) variables found")
 println()
 

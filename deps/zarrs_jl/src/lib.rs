@@ -37,7 +37,7 @@ pub enum ZarrsResult {
 
 static LAST_ERROR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
 
-fn set_error(msg: String) {
+pub(crate) fn set_error(msg: String) {
     *LAST_ERROR.lock().unwrap() = msg;
 }
 
@@ -70,11 +70,11 @@ pub extern "C" fn zarrsVersion() -> *mut c_char {
 
 type StorageArc = Arc<dyn ReadableWritableListableStorageTraits>;
 
-struct StorageHandle {
-    store: StorageArc,
+pub(crate) struct StorageHandle {
+    pub(crate) store: StorageArc,
 }
 
-fn str_from_ptr<'a>(ptr: *const c_char) -> Result<&'a str, ZarrsResult> {
+pub(crate) fn str_from_ptr<'a>(ptr: *const c_char) -> Result<&'a str, ZarrsResult> {
     if ptr.is_null() {
         return Err(ZarrsResult::ZARRS_ERROR_NULL_PTR);
     }
@@ -114,7 +114,7 @@ pub unsafe extern "C" fn zarrsCreateStorageFilesystem(
 // Storage — HTTP (read-only via object_store)
 // ---------------------------------------------------------------------------
 
-struct TokioBlockOn(tokio::runtime::Runtime);
+pub(crate) struct TokioBlockOn(pub(crate) tokio::runtime::Runtime);
 
 impl AsyncToSyncBlockOn for TokioBlockOn {
     fn block_on<F: core::future::Future>(&self, future: F) -> F::Output {
@@ -1028,13 +1028,15 @@ pub unsafe extern "C" fn zarrsJlArrayEraseChunk(
 }
 
 // ---------------------------------------------------------------------------
-// Icechunk storage adapter
+// Icechunk adapter — bridges icechunk::Store to zarrs async storage traits
 // ---------------------------------------------------------------------------
 
+// Icechunk FFI — Repository/Session/Storage handles (separate file)
 #[cfg(feature = "icechunk")]
-mod icechunk_adapter {
-    use super::*;
+mod icechunk;
 
+#[cfg(feature = "icechunk")]
+mod icechunk_adapter_impl {
     use zarrs_storage::{
         StorageError, StoreKey, StoreKeys, StoreKeysPrefixes, StorePrefix,
         byte_range::ByteRange as ZarsByteRange,
@@ -1044,25 +1046,25 @@ mod icechunk_adapter {
 
     /// Adapter wrapping icechunk::Store to implement zarrs async storage traits.
     pub struct IcechunkAdapter {
-        store: icechunk::Store,
+        store: ::icechunk::Store,
     }
 
     impl IcechunkAdapter {
-        pub fn new(store: icechunk::Store) -> Self {
+        pub fn new(store: ::icechunk::Store) -> Self {
             Self { store }
         }
     }
 
-    fn to_icechunk_byte_range(range: &ZarsByteRange) -> icechunk::format::ByteRange {
+    fn to_icechunk_byte_range(range: &ZarsByteRange) -> ::icechunk::format::ByteRange {
         match range {
             ZarsByteRange::FromStart(offset, Some(len)) => {
-                icechunk::format::ByteRange::from_offset_with_length(*offset, *len)
+                ::icechunk::format::ByteRange::from_offset_with_length(*offset, *len)
             }
             ZarsByteRange::FromStart(offset, None) => {
-                icechunk::format::ByteRange::from_offset(*offset)
+                ::icechunk::format::ByteRange::from_offset(*offset)
             }
             ZarsByteRange::Suffix(len) => {
-                icechunk::format::ByteRange::Last(*len)
+                ::icechunk::format::ByteRange::Last(*len)
             }
         }
     }
@@ -1074,7 +1076,7 @@ mod icechunk_adapter {
     #[async_trait::async_trait]
     impl zarrs_storage::AsyncReadableStorageTraits for IcechunkAdapter {
         async fn get(&self, key: &StoreKey) -> Result<MaybeBytes, StorageError> {
-            match self.store.get(key.as_str(), &icechunk::format::ByteRange::ALL).await {
+            match self.store.get(key.as_str(), &::icechunk::format::ByteRange::ALL).await {
                 Ok(bytes) => Ok(Some(Bytes::from(bytes.to_vec()))),
                 Err(e) => {
                     let msg = e.to_string();
@@ -1112,7 +1114,7 @@ mod icechunk_adapter {
         }
 
         async fn size_key(&self, key: &StoreKey) -> Result<Option<u64>, StorageError> {
-            match self.store.get(key.as_str(), &icechunk::format::ByteRange::ALL).await {
+            match self.store.get(key.as_str(), &::icechunk::format::ByteRange::ALL).await {
                 Ok(bytes) => Ok(Some(bytes.len() as u64)),
                 Err(_) => Ok(None),
             }
@@ -1144,19 +1146,18 @@ mod icechunk_adapter {
             use futures::TryStreamExt;
             let prefix_str = prefix.as_str().trim_end_matches('/');
             let stream = self.store.list_dir_items(prefix_str).await.map_err(ic_err)?;
-            let items: Vec<icechunk::store::ListDirItem> = stream.try_collect().await.map_err(ic_err)?;
+            let items: Vec<::icechunk::store::ListDirItem> = stream.try_collect().await.map_err(ic_err)?;
 
             let mut keys = Vec::new();
             let mut prefixes = Vec::new();
             for item in items {
                 match item {
-                    icechunk::store::ListDirItem::Key(k) => {
+                    ::icechunk::store::ListDirItem::Key(k) => {
                         if let Ok(key) = StoreKey::try_from(k.as_str()) {
                             keys.push(key);
                         }
                     }
-                    icechunk::store::ListDirItem::Prefix(p) => {
-                        // Ensure prefix has trailing slash for zarrs StorePrefix
+                    ::icechunk::store::ListDirItem::Prefix(p) => {
                         let p_with_slash = if p.ends_with('/') {
                             p
                         } else {
@@ -1202,121 +1203,7 @@ mod icechunk_adapter {
             false
         }
     }
-
-    /// Open an Icechunk repository from S3 and create a zarrs-compatible storage handle.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn zarrsCreateStorageIcechunk(
-        bucket: *const c_char,
-        prefix: *const c_char,
-        region: *const c_char,
-        anonymous: i32,
-        branch: *const c_char,
-        pStorage: *mut *mut StorageHandle,
-    ) -> ZarrsResult {
-        if pStorage.is_null() {
-            return ZarrsResult::ZARRS_ERROR_NULL_PTR;
-        }
-
-        let bucket_str = match str_from_ptr(bucket) {
-            Ok(s) => s.to_string(),
-            Err(r) => return r,
-        };
-
-        let prefix_str = if prefix.is_null() {
-            None
-        } else {
-            match str_from_ptr(prefix) {
-                Ok(s) if s.is_empty() => None,
-                Ok(s) => Some(s.to_string()),
-                Err(r) => return r,
-            }
-        };
-
-        let region_opt = if region.is_null() {
-            None
-        } else {
-            match str_from_ptr(region) {
-                Ok(s) if s.is_empty() => None,
-                Ok(s) => Some(s.to_string()),
-                Err(_) => None,
-            }
-        };
-
-        let branch_str = if branch.is_null() {
-            "main".to_string()
-        } else {
-            match str_from_ptr(branch) {
-                Ok(s) if s.is_empty() => "main".to_string(),
-                Ok(s) => s.to_string(),
-                Err(_) => "main".to_string(),
-            }
-        };
-
-        let runtime = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                set_error(format!("Failed to create tokio runtime: {e}"));
-                return ZarrsResult::ZARRS_ERROR_STORAGE;
-            }
-        };
-
-        let result = runtime.block_on(async {
-            let s3_opts = icechunk::config::S3Options {
-                region: region_opt,
-                endpoint_url: None,
-                anonymous: anonymous != 0,
-                allow_http: false,
-                force_path_style: false,
-                network_stream_timeout_seconds: Some(30),
-                requester_pays: false,
-            };
-
-            let credentials = if anonymous != 0 {
-                Some(icechunk::config::S3Credentials::Anonymous)
-            } else {
-                Some(icechunk::config::S3Credentials::FromEnv)
-            };
-
-            let storage = icechunk::new_s3_storage(
-                s3_opts,
-                bucket_str,
-                prefix_str,
-                credentials,
-            ).map_err(|e| format!("S3 storage error: {e}"))?;
-
-            let repo = icechunk::Repository::open(
-                None,
-                storage,
-                std::collections::HashMap::new(),
-            ).await.map_err(|e| format!("Repository open error: {e}"))?;
-
-            let version = icechunk::repository::VersionInfo::BranchTipRef(branch_str);
-            let session = repo.readonly_session(&version)
-                .await
-                .map_err(|e| format!("Session error: {e}"))?;
-
-            let session_arc = std::sync::Arc::new(tokio::sync::RwLock::new(session));
-            let ic_store = icechunk::Store::from_session(session_arc).await;
-
-            Ok::<_, String>(ic_store)
-        });
-
-        match result {
-            Ok(ic_store) => {
-                let adapter = Arc::new(IcechunkAdapter::new(ic_store));
-                let block_on = TokioBlockOn(runtime);
-                let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(adapter, block_on));
-
-                let handle = Box::new(StorageHandle {
-                    store: sync_store,
-                });
-                unsafe { *pStorage = Box::into_raw(handle) };
-                ZarrsResult::ZARRS_SUCCESS
-            }
-            Err(msg) => {
-                set_error(msg);
-                ZarrsResult::ZARRS_ERROR_STORAGE
-            }
-        }
-    }
 }
+
+#[cfg(feature = "icechunk")]
+pub(crate) use icechunk_adapter_impl::IcechunkAdapter;

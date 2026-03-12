@@ -70,22 +70,6 @@ function zarrs_create_storage_filesystem(path::AbstractString)
     return storage_ptr[]
 end
 
-function zarrs_create_storage_icechunk(bucket::AbstractString, prefix::AbstractString,
-                                      region::AbstractString, anonymous::Bool,
-                                      branch::AbstractString)
-    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    result = @ccall libzarrs_jl[].zarrsCreateStorageIcechunk(
-        bucket::Cstring,
-        prefix::Cstring,
-        region::Cstring,
-        Cint(anonymous)::Cint,
-        branch::Cstring,
-        storage_ptr::Ptr{Ptr{Cvoid}}
-    )::ZarrsResult
-    check_error(result)
-    return storage_ptr[]
-end
-
 function zarrs_create_storage_http(url::AbstractString)
     storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsCreateStorageHTTP(
@@ -465,6 +449,179 @@ function zarrs_jl_array_erase_chunk(storage::Ptr{Cvoid}, path::AbstractString, i
         indices::Ptr{UInt64}
     )::ZarrsResult
     check_error(result)
+end
+
+# ---------------------------------------------------------------------------
+# Icechunk — Storage / Repository / Session
+# ---------------------------------------------------------------------------
+
+function zarrs_icechunk_s3_storage(bucket::AbstractString, prefix::AbstractString,
+                                   region::AbstractString, anonymous::Bool,
+                                   endpoint_url::AbstractString, allow_http::Bool)
+    handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkS3Storage(
+        bucket::Cstring,
+        prefix::Cstring,
+        region::Cstring,
+        Cint(anonymous)::Cint,
+        endpoint_url::Cstring,
+        Cint(allow_http)::Cint,
+        handle_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return handle_ptr[]
+end
+
+function zarrs_icechunk_gcs_storage(bucket::AbstractString, prefix::AbstractString)
+    handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkGcsStorage(
+        bucket::Cstring,
+        prefix::Cstring,
+        handle_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return handle_ptr[]
+end
+
+function zarrs_icechunk_azure_storage(account::AbstractString, container::AbstractString,
+                                      prefix::AbstractString)
+    handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkAzureStorage(
+        account::Cstring,
+        container::Cstring,
+        prefix::Cstring,
+        handle_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return handle_ptr[]
+end
+
+function zarrs_icechunk_local_storage(path::AbstractString)
+    handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkLocalStorage(
+        path::Cstring,
+        handle_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return handle_ptr[]
+end
+
+function zarrs_icechunk_memory_storage()
+    handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkMemoryStorage(
+        handle_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return handle_ptr[]
+end
+
+function zarrs_icechunk_destroy_storage(handle::Ptr{Cvoid})
+    result = @ccall libzarrs_jl[].zarrsIcechunkDestroyStorage(
+        handle::Ptr{Cvoid}
+    )::ZarrsResult
+    check_error(result)
+end
+
+function zarrs_icechunk_repo_open(ic_storage::Ptr{Cvoid})
+    repo_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoOpen(
+        ic_storage::Ptr{Cvoid},
+        repo_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return repo_ptr[]
+end
+
+function zarrs_icechunk_repo_create(ic_storage::Ptr{Cvoid})
+    repo_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoCreate(
+        ic_storage::Ptr{Cvoid},
+        repo_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return repo_ptr[]
+end
+
+function zarrs_icechunk_repo_open_or_create(ic_storage::Ptr{Cvoid})
+    repo_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoOpenOrCreate(
+        ic_storage::Ptr{Cvoid},
+        repo_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return repo_ptr[]
+end
+
+function zarrs_icechunk_destroy_repo(repo::Ptr{Cvoid})
+    result = @ccall libzarrs_jl[].zarrsIcechunkDestroyRepo(
+        repo::Ptr{Cvoid}
+    )::ZarrsResult
+    check_error(result)
+end
+
+function zarrs_icechunk_repo_list_branches(repo::Ptr{Cvoid})
+    json_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoListBranches(
+        repo::Ptr{Cvoid},
+        json_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    s = unsafe_string(json_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(json_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
+function zarrs_icechunk_repo_list_tags(repo::Ptr{Cvoid})
+    json_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoListTags(
+        repo::Ptr{Cvoid},
+        json_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    s = unsafe_string(json_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(json_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
+function zarrs_icechunk_readonly_session(repo::Ptr{Cvoid}, version_type::Cint,
+                                         version_value::AbstractString)
+    session_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkReadonlySession(
+        repo::Ptr{Cvoid},
+        version_type::Cint,
+        version_value::Cstring,
+        session_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return session_ptr[]
+end
+
+function zarrs_icechunk_writable_session(repo::Ptr{Cvoid}, branch::AbstractString)
+    session_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkWritableSession(
+        repo::Ptr{Cvoid},
+        branch::Cstring,
+        session_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return session_ptr[]
+end
+
+function zarrs_icechunk_destroy_session(session::Ptr{Cvoid})
+    result = @ccall libzarrs_jl[].zarrsIcechunkDestroySession(
+        session::Ptr{Cvoid}
+    )::ZarrsResult
+    check_error(result)
+end
+
+function zarrs_icechunk_session_get_storage(session::Ptr{Cvoid})
+    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkSessionGetStorage(
+        session::Ptr{Cvoid},
+        storage_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return storage_ptr[]
 end
 
 end # module LibZarrs
