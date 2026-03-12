@@ -250,11 +250,21 @@ end
 # Attributes
 # ---------------------------------------------------------------------------
 
+"""
+    get_attributes(z::ZarrsArray) -> Dict{String,Any}
+
+Return the array's user attributes as a dictionary.
+"""
 function get_attributes(z::ZarrsArray)
     json_str = LibZarrs.zarrs_array_get_attributes(z.handle.ptr)
     return JSON.parse(json_str)
 end
 
+"""
+    set_attributes!(z::ZarrsArray, attrs::Dict)
+
+Replace the array's user attributes and persist to storage.
+"""
 function set_attributes!(z::ZarrsArray, attrs::Dict)
     LibZarrs.zarrs_array_set_attributes(z.handle.ptr, JSON.json(attrs))
     LibZarrs.zarrs_array_store_metadata(z.handle.ptr)

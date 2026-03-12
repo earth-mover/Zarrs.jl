@@ -100,11 +100,21 @@ end
 # Group attributes
 # ---------------------------------------------------------------------------
 
+"""
+    get_attributes(g::ZarrsGroup) -> Dict{String,Any}
+
+Return the group's user attributes as a dictionary.
+"""
 function get_attributes(g::ZarrsGroup)
     json_str = LibZarrs.zarrs_group_get_attributes(g.handle.ptr)
     return JSON.parse(json_str)
 end
 
+"""
+    set_attributes!(g::ZarrsGroup, attrs::Dict)
+
+Replace the group's user attributes and persist to storage.
+"""
 function set_attributes!(g::ZarrsGroup, attrs::Dict)
     LibZarrs.zarrs_group_set_attributes(g.handle.ptr, JSON.json(attrs))
     LibZarrs.zarrs_group_store_metadata(g.handle.ptr)

@@ -132,7 +132,7 @@ session = writable_session(repo, "main")
 snapshot_id = commit(session, "initial data")
 ```
 
-See the [Icechunk documentation](@ref) for full details on storage backends,
+See the [Icechunk Integration](@ref) page for full details on storage backends,
 credentials, branches, and tags.
 
 ## DiskArrays Integration

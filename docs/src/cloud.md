@@ -18,7 +18,7 @@ subset = z[1:10, 1:10]
 ## Icechunk (S3, GCS, Azure)
 
 For cloud storage with versioning, use the Icechunk integration. See the
-[Icechunk documentation](@ref) for full details.
+[Icechunk Integration](@ref) for full details.
 
 ```julia
 using Zarrs

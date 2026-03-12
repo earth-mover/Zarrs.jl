@@ -15,6 +15,8 @@ zinfo
 ```@docs
 ZarrsGroup
 zgroup
+Base.keys(::ZarrsGroup)
+Base.getindex(::ZarrsGroup, ::AbstractString)
 ```
 
 ## Attributes
@@ -71,4 +73,23 @@ Zarrs.Icechunk.create_tag
 Zarrs.Icechunk.delete_tag
 Zarrs.Icechunk.lookup_branch
 Zarrs.Icechunk.lookup_tag
+```
+
+## Storage
+
+```@docs
+Zarrs.create_storage
+Zarrs.ZarrsStorageHandle
+Zarrs.ZarrsArrayHandle
+Zarrs.ZarrsGroupHandle
+```
+
+## Internals
+
+```@docs
+Zarrs.julia_shape
+Zarrs.zarrs_subset
+Zarrs.build_v3_metadata
+Zarrs.build_v2_metadata
+Zarrs.numpy_dtype_str
 ```
