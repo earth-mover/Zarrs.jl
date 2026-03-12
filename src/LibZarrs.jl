@@ -70,6 +70,16 @@ function zarrs_create_storage_filesystem(path::AbstractString)
     return storage_ptr[]
 end
 
+function zarrs_create_storage_http(url::AbstractString)
+    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsCreateStorageHTTP(
+        url::Cstring,
+        storage_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return storage_ptr[]
+end
+
 function zarrs_destroy_storage(storage::Ptr{Cvoid})
     result = @ccall libzarrs_jl[].zarrsDestroyStorage(
         storage::Ptr{Cvoid}

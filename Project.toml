@@ -1,6 +1,9 @@
 name = "Zarrs"
 uuid = "8a40563a-1bc2-47cb-b703-d0ff270a35b4"
 version = "0.1.0"
+authors = ["Joe Hamman <joe@joehamman.com>"]
+description = "High-performance Zarr V2 and V3 arrays for Julia, powered by the zarrs Rust library"
+license = "MIT OR Apache-2.0"
 
 [deps]
 DiskArrays = "3c3547ce-8d99-4f5e-a174-61eb10b00ae3"

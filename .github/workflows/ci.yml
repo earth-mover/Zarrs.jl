@@ -80,3 +80,34 @@ jobs:
       - name: Zarrs.jl self-compatibility tests
         run: julia --project -e '
           using Pkg; Pkg.test(test_args=["compat_zarrs"])'
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: julia-actions/cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build libzarrs_jl
+        run: julia --project deps/build.jl
+
+      - name: Install dependencies
+        run: julia --project=docs -e '
+          using Pkg;
+          Pkg.develop(PackageSpec(path=pwd()));
+          Pkg.instantiate()'
+
+      - name: Build and deploy docs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+        run: julia --project=docs docs/make.jl

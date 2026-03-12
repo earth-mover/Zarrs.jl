@@ -70,9 +70,14 @@ end
 """
     create_storage(path::AbstractString) -> ZarrsStorageHandle
 
-Create a storage handle for the given path. Currently only filesystem is supported.
+Create a storage handle for the given path or URL.
+Supports filesystem paths and HTTP/HTTPS URLs.
 """
 function create_storage(path::AbstractString)
-    ptr = LibZarrs.zarrs_create_storage_filesystem(path)
+    if startswith(path, "http://") || startswith(path, "https://")
+        ptr = LibZarrs.zarrs_create_storage_http(path)
+    else
+        ptr = LibZarrs.zarrs_create_storage_filesystem(path)
+    end
     return ZarrsStorageHandle(ptr)
 end

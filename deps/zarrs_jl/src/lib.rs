@@ -9,6 +9,7 @@ use once_cell::sync::Lazy;
 use zarrs::array::{Array, ArrayMetadata, ArrayBytes};
 use zarrs::group::Group;
 use zarrs::storage::ReadableWritableListableStorageTraits;
+use zarrs_storage::storage_adapter::async_to_sync::{AsyncToSyncBlockOn, AsyncToSyncStorageAdapter};
 
 // ---------------------------------------------------------------------------
 // Error handling
@@ -107,6 +108,59 @@ pub unsafe extern "C" fn zarrsCreateStorageFilesystem(
             ZarrsResult::ZARRS_ERROR_STORAGE
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Storage — HTTP (read-only via object_store)
+// ---------------------------------------------------------------------------
+
+struct TokioBlockOn(tokio::runtime::Runtime);
+
+impl AsyncToSyncBlockOn for TokioBlockOn {
+    fn block_on<F: core::future::Future>(&self, future: F) -> F::Output {
+        self.0.block_on(future)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsCreateStorageHTTP(
+    url: *const c_char,
+    pStorage: *mut *mut StorageHandle,
+) -> ZarrsResult {
+    let url_str = match str_from_ptr(url) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_error(format!("Failed to create tokio runtime: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let options = object_store::ClientOptions::new().with_allow_http(true);
+    let http_store = match object_store::http::HttpBuilder::new()
+        .with_url(url_str)
+        .with_client_options(options)
+        .build()
+    {
+        Ok(store) => store,
+        Err(e) => {
+            set_error(format!("Failed to create HTTP store: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let async_store = Arc::new(zarrs_object_store::AsyncObjectStore::new(http_store));
+    let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(runtime)));
+
+    let handle = Box::new(StorageHandle {
+        store: sync_store,
+    });
+    unsafe { *pStorage = Box::into_raw(handle) };
+    ZarrsResult::ZARRS_SUCCESS
 }
 
 #[unsafe(no_mangle)]

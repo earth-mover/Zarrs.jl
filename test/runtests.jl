@@ -27,4 +27,8 @@ requested = ARGS
     if isempty(requested) || "compat_zarr_jl" in requested
         include("test_compat_zarr_jl.jl")
     end
+
+    if isempty(requested) || "http" in requested
+        include("test_http.jl")
+    end
 end
