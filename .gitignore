@@ -1,0 +1,6 @@
+deps/lib/
+deps/zarrs_jl/target/
+*.dylib
+*.so
+*.dll
+Manifest.toml

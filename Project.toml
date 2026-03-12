@@ -1,0 +1,12 @@
+name = "Zarrs"
+uuid = "8a40563a-1bc2-47cb-b703-d0ff270a35b4"
+version = "0.1.0"
+
+[deps]
+DiskArrays = "3c3547ce-8d99-4f5e-a174-61eb10b00ae3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+
+[compat]
+DiskArrays = "0.4.2"
+JSON = "0.21, 1"
+julia = "1.10"
