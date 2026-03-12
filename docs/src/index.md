@@ -5,13 +5,33 @@ High-performance [Zarr](https://zarr.dev/) V2 and V3 arrays for Julia, powered b
 ## Features
 
 - **Zarr V3 and V2** — Full support for both specification versions
-- **High performance** — Backed by the zarrs Rust library with native codecs (zstd, gzip, blosc)
-- **Sharding** — Native support for the Zarr V3 sharding codec
+- **High-performance Rust codecs** — zstd, gzip, blosc (see [Getting Started](@ref))
+- **Sharding** — Native support for the Zarr V3 sharding codec (see [Getting Started](@ref))
 - **DiskArrays.jl integration** — Standard Julia array interface with lazy, chunked I/O
 - **14 numeric types** — Bool, Int8–Int64, UInt8–UInt64, Float16/32/64, ComplexF32/64
 - **Cross-language compatible** — Arrays are readable/writable by zarr-python and other Zarr implementations
-- **HTTP storage** — Read remote Zarr arrays over HTTP/HTTPS
-- **Groups** — Hierarchical data organization with attributes
+- **HTTP storage** — Read remote Zarr arrays over HTTP/HTTPS (see [Cloud & Remote Access](@ref))
+- **Groups** — Hierarchical data organization with attributes (see [Getting Started](@ref))
+- **Icechunk** — Versioned cloud storage on S3, GCS, and Azure (see [Icechunk Integration](@ref))
+
+## Documentation Overview
+
+- **[Getting Started](@ref)** — Creating, reading, and writing arrays; compressors, sharding, groups, attributes
+- **[Cloud & Remote Access](@ref)** — HTTP, S3, GCS, Azure via Icechunk
+- **[Icechunk Integration](@ref)** — Version-controlled Zarr repositories with branches, tags, and commits
+- **[API Reference](@ref)** — Complete function and type documentation
+
+## Installation
+
+```julia
+using Pkg
+Pkg.add("Zarrs")
+```
+
+!!! note "Rust toolchain"
+    Zarrs.jl requires a Rust toolchain for building from source. Install from
+    [rustup.rs](https://rustup.rs). Pre-built binaries will be available in a
+    future release via BinaryBuilder.jl.
 
 ## Quick Start
 
@@ -32,14 +52,6 @@ z2 = zopen("/tmp/my.zarr")
 z3 = zopen("https://example.com/data.zarr")
 ```
 
-## Installation
+## Status
 
-```julia
-using Pkg
-Pkg.add("Zarrs")
-```
-
-!!! note "Rust toolchain"
-    Zarrs.jl requires a Rust toolchain for building from source. Install from
-    [rustup.rs](https://rustup.rs). Pre-built binaries will be available in a
-    future release via BinaryBuilder.jl.
+Zarrs.jl is at v0.1.0 and under active development. Source code and issue tracker: [github.com/zarrs/zarrs-julia](https://github.com/zarrs/zarrs-julia).
