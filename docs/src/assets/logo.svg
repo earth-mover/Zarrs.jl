@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Option 4: Clean "Zarrs" + ".jl" with Julia trio dots as icon -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 140" width="420" height="140">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 140" width="380" height="140">
   <defs>
     <linearGradient id="zarrsGrad" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#E58077"/>
