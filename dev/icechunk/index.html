@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Icechunk · Zarrs.jl</title><meta name="title" content="Icechunk · Zarrs.jl"/><meta property="og:title" content="Icechunk · Zarrs.jl"/><meta property="twitter:title" content="Icechunk · Zarrs.jl"/><meta name="description" content="Documentation for Zarrs.jl."/><meta property="og:description" content="Documentation for Zarrs.jl."/><meta property="twitter:description" content="Documentation for Zarrs.jl."/><meta property="og:url" content="https://earth-mover.github.io/Zarrs.jl/icechunk/"/><meta property="twitter:url" content="https://earth-mover.github.io/Zarrs.jl/icechunk/"/><link rel="canonical" href="https://earth-mover.github.io/Zarrs.jl/icechunk/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">Zarrs.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../getting_started/">Getting Started</a></li><li><a class="tocitem" href="../cloud/">Cloud &amp; Remote Access</a></li><li class="is-active"><a class="tocitem" href>Icechunk</a><ul class="internal"><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Storage-Backends"><span>Storage Backends</span></a></li><li><a class="tocitem" href="#Workflow"><span>Workflow</span></a></li><li><a class="tocitem" href="#Branch-and-Tag-Management"><span>Branch &amp; Tag Management</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Icechunk</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Icechunk</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/earth-mover/Zarrs.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/earth-mover/Zarrs.jl/blob/main/docs/src/icechunk.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Icechunk-Integration"><a class="docs-heading-anchor" href="#Icechunk-Integration">Icechunk Integration</a><a id="Icechunk-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Icechunk-Integration" title="Permalink"></a></h1><p>Zarrs.jl provides full integration with <a href="https://icechunk.io">Icechunk</a>, a transactional storage engine for Zarr. Icechunk adds version control (branches, tags, commits) to Zarr datasets stored on cloud object stores.</p><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Zarrs
+using Zarrs.Icechunk</code></pre><p>All Icechunk types and functions live in the <code>Zarrs.Icechunk</code> submodule.</p><h2 id="Storage-Backends"><a class="docs-heading-anchor" href="#Storage-Backends">Storage Backends</a><a id="Storage-Backends-1"></a><a class="docs-heading-anchor-permalink" href="#Storage-Backends" title="Permalink"></a></h2><h3 id="Amazon-S3"><a class="docs-heading-anchor" href="#Amazon-S3">Amazon S3</a><a id="Amazon-S3-1"></a><a class="docs-heading-anchor-permalink" href="#Amazon-S3" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = S3Storage(
+    bucket    = &quot;my-bucket&quot;,
+    prefix    = &quot;path/to/repo&quot;,
+    region    = &quot;us-west-2&quot;,
+    anonymous = false,
+)</code></pre><p>For explicit credentials:</p><pre><code class="language-julia hljs">storage = S3Storage(
+    bucket           = &quot;my-bucket&quot;,
+    prefix           = &quot;path/to/repo&quot;,
+    region           = &quot;us-west-2&quot;,
+    access_key_id    = &quot;AKIA...&quot;,
+    secret_access_key = &quot;...&quot;,
+    session_token    = &quot;&quot;,  # optional
+)</code></pre><p>For S3-compatible services (e.g., MinIO):</p><pre><code class="language-julia hljs">storage = S3Storage(
+    bucket       = &quot;my-bucket&quot;,
+    prefix       = &quot;&quot;,
+    region       = &quot;&quot;,
+    endpoint_url = &quot;http://localhost:9000&quot;,
+    allow_http   = true,
+)</code></pre><h3 id="Google-Cloud-Storage"><a class="docs-heading-anchor" href="#Google-Cloud-Storage">Google Cloud Storage</a><a id="Google-Cloud-Storage-1"></a><a class="docs-heading-anchor-permalink" href="#Google-Cloud-Storage" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = GCSStorage(bucket=&quot;my-bucket&quot;, prefix=&quot;path/to/repo&quot;)</code></pre><p>Credential options:</p><pre><code class="language-julia hljs"># Service account file
+storage = GCSStorage(bucket=&quot;b&quot;, prefix=&quot;p&quot;,
+    credential_type=:service_account_path,
+    credential_value=&quot;/path/to/sa.json&quot;)
+
+# Service account JSON string
+storage = GCSStorage(bucket=&quot;b&quot;, prefix=&quot;p&quot;,
+    credential_type=:service_account_key,
+    credential_value=read(&quot;sa.json&quot;, String))
+
+# Anonymous access
+storage = GCSStorage(bucket=&quot;b&quot;, prefix=&quot;p&quot;, credential_type=:anonymous)</code></pre><h3 id="Azure-Blob-Storage"><a class="docs-heading-anchor" href="#Azure-Blob-Storage">Azure Blob Storage</a><a id="Azure-Blob-Storage-1"></a><a class="docs-heading-anchor-permalink" href="#Azure-Blob-Storage" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = AzureStorage(account=&quot;myaccount&quot;, container=&quot;mycontainer&quot;, prefix=&quot;path&quot;)</code></pre><p>Credential options: <code>:from_env</code> (default), <code>:access_key</code>, <code>:sas_token</code>, <code>:bearer_token</code>.</p><h3 id="Local-Filesystem"><a class="docs-heading-anchor" href="#Local-Filesystem">Local Filesystem</a><a id="Local-Filesystem-1"></a><a class="docs-heading-anchor-permalink" href="#Local-Filesystem" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = LocalStorage(&quot;/path/to/repo&quot;)</code></pre><h3 id="In-Memory-(Testing)"><a class="docs-heading-anchor" href="#In-Memory-(Testing)">In-Memory (Testing)</a><a id="In-Memory-(Testing)-1"></a><a class="docs-heading-anchor-permalink" href="#In-Memory-(Testing)" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = MemoryStorage()</code></pre><h2 id="Workflow"><a class="docs-heading-anchor" href="#Workflow">Workflow</a><a id="Workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Workflow" title="Permalink"></a></h2><h3 id="Creating-a-Repository"><a class="docs-heading-anchor" href="#Creating-a-Repository">Creating a Repository</a><a id="Creating-a-Repository-1"></a><a class="docs-heading-anchor-permalink" href="#Creating-a-Repository" title="Permalink"></a></h3><pre><code class="language-julia hljs">storage = MemoryStorage()
+repo = Repository(storage; mode=:create)</code></pre><p>Modes: <code>:open</code>, <code>:create</code>, <code>:open_or_create</code>.</p><h3 id="Writing-Data"><a class="docs-heading-anchor" href="#Writing-Data">Writing Data</a><a id="Writing-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Writing-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">session = writable_session(repo, &quot;main&quot;)
+g = zopen(session)
+
+# Create arrays by writing to the session&#39;s storage
+# ... write data ...
+
+snapshot_id = commit(session, &quot;Added initial data&quot;)</code></pre><h3 id="Reading-Data"><a class="docs-heading-anchor" href="#Reading-Data">Reading Data</a><a id="Reading-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Reading-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">session = readonly_session(repo; branch=&quot;main&quot;)
+g = zopen(session)
+data = g[&quot;temperature&quot;][:, :, 1]</code></pre><p>Read from a tag:</p><pre><code class="language-julia hljs">session = readonly_session(repo; tag=&quot;v1.0&quot;)</code></pre><h3 id="Checking-for-Changes"><a class="docs-heading-anchor" href="#Checking-for-Changes">Checking for Changes</a><a id="Checking-for-Changes-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-for-Changes" title="Permalink"></a></h3><pre><code class="language-julia hljs">session = writable_session(repo, &quot;main&quot;)
+# ... modify data ...
+has_uncommitted_changes(session)  # true
+commit(session, &quot;changes&quot;)</code></pre><h2 id="Branch-and-Tag-Management"><a class="docs-heading-anchor" href="#Branch-and-Tag-Management">Branch &amp; Tag Management</a><a id="Branch-and-Tag-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Branch-and-Tag-Management" title="Permalink"></a></h2><pre><code class="language-julia hljs"># List branches and tags
+branches = list_branches(repo)
+tags = list_tags(repo)
+
+# Look up snapshot IDs
+snap_id = lookup_branch(repo, &quot;main&quot;)
+snap_id = lookup_tag(repo, &quot;v1.0&quot;)
+
+# Create and delete branches
+create_branch(repo, &quot;feature&quot;, snap_id)
+delete_branch(repo, &quot;feature&quot;)
+
+# Create and delete tags
+create_tag(repo, &quot;v2.0&quot;, snap_id)
+delete_tag(repo, &quot;v2.0&quot;)</code></pre><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Zarrs
+using Zarrs.Icechunk
+
+# Create an in-memory Icechunk repository
+storage = MemoryStorage()
+repo = Repository(storage; mode=:create)
+
+# Write data
+session = writable_session(repo, &quot;main&quot;)
+g = zopen(session)
+# ... create and populate arrays ...
+snap_id = commit(session, &quot;initial data&quot;)
+
+# Create a tag for this version
+create_tag(repo, &quot;v1.0&quot;, snap_id)
+
+# Read data back
+session = readonly_session(repo; tag=&quot;v1.0&quot;)
+g = zopen(session)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../cloud/">« Cloud &amp; Remote Access</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 12 March 2026 19:11">Thursday 12 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
