@@ -104,4 +104,7 @@ Zarrs.zarrs_subset
 Zarrs.build_v3_metadata
 Zarrs.build_v2_metadata
 Zarrs.numpy_dtype_str
+Zarrs._try_load_consolidated!
+Zarrs._flatten_v3_consolidated
+Zarrs._keys_from_consolidated
 ```
