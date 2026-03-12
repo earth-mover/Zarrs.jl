@@ -1,4 +1,8 @@
-# Zarrs.jl
+```@raw html
+<p align="center">
+  <img src="assets/logo.svg" alt="Zarrs.jl" width="420">
+</p>
+```
 
 High-performance [Zarr](https://zarr.dev/) V2 and V3 arrays for Julia, powered by the [zarrs](https://github.com/zarrs/zarrs) Rust library.
 

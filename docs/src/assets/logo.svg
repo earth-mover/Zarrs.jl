@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Option 4: Clean "Zarrs" + ".jl" with Julia trio dots as icon -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 140" width="420" height="140">
+  <defs>
+    <linearGradient id="zarrsGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E58077"/>
+      <stop offset="0.0872" stop-color="#E57A77"/>
+      <stop offset="0.2073" stop-color="#E46876"/>
+      <stop offset="0.3465" stop-color="#E34B75"/>
+      <stop offset="0.499" stop-color="#E12374"/>
+      <stop offset="0.5612" stop-color="#E01073"/>
+      <stop offset="1" stop-color="#BB1085"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Julia trio dots as standalone icon/mark -->
+  <g transform="translate(20, 32)">
+    <circle cx="22" cy="0" r="16" fill="#389826"/>   <!-- green top -->
+    <circle cx="0" cy="36" r="16" fill="#CB3C33"/>    <!-- red bottom-left -->
+    <circle cx="44" cy="36" r="16" fill="#9558B2"/>   <!-- purple bottom-right -->
+    <!-- Small pink dot in center (zarr accent) -->
+    <circle cx="22" cy="24" r="6" fill="#E01073"/>
+  </g>
+
+  <!-- "Zarrs" in zarr pink-to-magenta gradient -->
+  <text x="90" y="92" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="800" font-size="76" letter-spacing="-1" fill="url(#zarrsGrad)">Zarrs</text>
+
+  <!-- ".jl" lighter weight -->
+  <text x="280" y="92" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="400" font-size="76" letter-spacing="-1" fill="#666">.jl</text>
+
+  <!-- Underline under "rs" (the last two characters of Zarrs) -->
+  <rect x="216" y="98" width="62" height="4" rx="2" fill="url(#zarrsGrad)"/>
+
+  <!-- Tagline -->
+  <text x="92" y="122" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="400" font-size="14" fill="#999">High-performance Zarr arrays for Julia</text>
+</svg>

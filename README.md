@@ -1,9 +1,13 @@
-# Zarrs.jl
+<p align="center">
+  <img src="logo/logo.svg" alt="Zarrs.jl" width="420">
+</p>
 
-[![CI](https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml)
-[![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://earth-mover.github.io/Zarrs.jl/stable)
-[![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://earth-mover.github.io/Zarrs.jl/dev)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
+<p align="center">
+  <a href="https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml"><img src="https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://earth-mover.github.io/Zarrs.jl/stable"><img src="https://img.shields.io/badge/docs-stable-blue.svg" alt="Docs (stable)"></a>
+  <a href="https://earth-mover.github.io/Zarrs.jl/dev"><img src="https://img.shields.io/badge/docs-dev-blue.svg" alt="Docs (dev)"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue" alt="License"></a>
+</p>
 
 High-performance [Zarr](https://zarr.dev/) V2 and V3 arrays for Julia, powered by the [zarrs](https://github.com/zarrs/zarrs) Rust library.
 
