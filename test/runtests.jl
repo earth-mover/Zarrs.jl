@@ -31,4 +31,8 @@ requested = ARGS
     if isempty(requested) || "http" in requested
         include("test_http.jl")
     end
+
+    if isempty(requested) || "icechunk" in requested
+        include("test_icechunk.jl")
+    end
 end

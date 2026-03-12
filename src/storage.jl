@@ -92,9 +92,9 @@ function create_storage(path::AbstractString;
         scheme = startswith(path, "icechunk://") ? "icechunk://" : "s3://"
         rest = path[length(scheme) + 1:end]
         bucket, prefix = _split_s3_path(rest)
-        storage = IcechunkS3Storage(bucket=bucket, prefix=prefix, region=region, anonymous=anonymous)
-        repo = IcechunkRepository(storage)
-        session = readonly_session(repo; branch=branch)
+        storage = Icechunk.S3Storage(bucket=bucket, prefix=prefix, region=region, anonymous=anonymous)
+        repo = Icechunk.Repository(storage)
+        session = Icechunk.readonly_session(repo; branch=branch)
         return session.zarrs_storage
     elseif startswith(path, "http://") || startswith(path, "https://")
         ptr = LibZarrs.zarrs_create_storage_http(path)

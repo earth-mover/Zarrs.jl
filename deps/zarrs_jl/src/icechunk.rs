@@ -25,8 +25,11 @@ pub struct IcRepoHandle {
 }
 
 /// Handle wrapping an Icechunk Session and its Store (zarr-compatible).
+/// Stores both the Store (for zarrs compatibility) and the underlying Session
+/// (for commit/has_changes operations).
 pub struct IcSessionHandle {
     pub store: icechunk::Store,
+    pub session: Arc<tokio::sync::RwLock<icechunk::session::Session>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -63,6 +66,9 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
     anonymous: i32,
     endpoint_url: *const c_char,
     allow_http: i32,
+    access_key_id: *const c_char,
+    secret_access_key: *const c_char,
+    session_token: *const c_char,
     pHandle: *mut *mut IcStorageHandle,
 ) -> ZarrsResult {
     if pHandle.is_null() {
@@ -76,6 +82,9 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
     let prefix_opt = opt_string(prefix);
     let region_opt = opt_string(region);
     let endpoint_opt = opt_string(endpoint_url);
+    let access_key_opt = opt_string(access_key_id);
+    let secret_key_opt = opt_string(secret_access_key);
+    let session_token_opt = opt_string(session_token);
 
     let runtime = match make_runtime() {
         Ok(rt) => rt,
@@ -97,6 +106,15 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
 
     let credentials = if anonymous != 0 {
         Some(icechunk::config::S3Credentials::Anonymous)
+    } else if let (Some(ak), Some(sk)) = (&access_key_opt, &secret_key_opt) {
+        Some(icechunk::config::S3Credentials::Static(
+            icechunk::config::S3StaticCredentials {
+                access_key_id: ak.clone(),
+                secret_access_key: sk.clone(),
+                session_token: session_token_opt,
+                expires_after: None,
+            },
+        ))
     } else {
         Some(icechunk::config::S3Credentials::FromEnv)
     };
@@ -118,6 +136,8 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
 pub unsafe extern "C" fn zarrsIcechunkGcsStorage(
     bucket: *const c_char,
     prefix: *const c_char,
+    credential_type: i32,
+    credential_value: *const c_char,
     pHandle: *mut *mut IcStorageHandle,
 ) -> ZarrsResult {
     if pHandle.is_null() {
@@ -129,6 +149,7 @@ pub unsafe extern "C" fn zarrsIcechunkGcsStorage(
         Err(r) => return r,
     };
     let prefix_opt = opt_string(prefix);
+    let cred_value_opt = opt_string(credential_value);
 
     let runtime = match make_runtime() {
         Ok(rt) => rt,
@@ -138,8 +159,51 @@ pub unsafe extern "C" fn zarrsIcechunkGcsStorage(
         }
     };
 
+    let credentials = match credential_type {
+        1 => Some(icechunk::config::GcsCredentials::Anonymous),
+        2 => {
+            // ServiceAccountPath
+            if let Some(path) = cred_value_opt {
+                Some(icechunk::config::GcsCredentials::Static(
+                    icechunk::config::GcsStaticCredentials::ServiceAccount(path.into()),
+                ))
+            } else {
+                Some(icechunk::config::GcsCredentials::FromEnv)
+            }
+        }
+        3 => {
+            // ServiceAccountKey (JSON string)
+            if let Some(key) = cred_value_opt {
+                Some(icechunk::config::GcsCredentials::Static(
+                    icechunk::config::GcsStaticCredentials::ServiceAccountKey(key),
+                ))
+            } else {
+                Some(icechunk::config::GcsCredentials::FromEnv)
+            }
+        }
+        4 => {
+            // BearerToken
+            if let Some(token) = cred_value_opt {
+                Some(icechunk::config::GcsCredentials::Static(
+                    icechunk::config::GcsStaticCredentials::BearerToken(
+                        icechunk::config::GcsBearerCredential {
+                            bearer: token,
+                            expires_after: None,
+                        },
+                    ),
+                ))
+            } else {
+                Some(icechunk::config::GcsCredentials::FromEnv)
+            }
+        }
+        _ => {
+            // 0 or default = FromEnv
+            Some(icechunk::config::GcsCredentials::FromEnv)
+        }
+    };
+
     let result = runtime.block_on(async {
-        icechunk::storage::new_gcs_storage(bucket_str, prefix_opt, None, None)
+        icechunk::storage::new_gcs_storage(bucket_str, prefix_opt, credentials, None)
             .await
             .map_err(|e| format!("GCS storage error: {e}"))
     });
@@ -162,6 +226,8 @@ pub unsafe extern "C" fn zarrsIcechunkAzureStorage(
     account: *const c_char,
     container: *const c_char,
     prefix: *const c_char,
+    credential_type: i32,
+    credential_value: *const c_char,
     pHandle: *mut *mut IcStorageHandle,
 ) -> ZarrsResult {
     if pHandle.is_null() {
@@ -177,6 +243,7 @@ pub unsafe extern "C" fn zarrsIcechunkAzureStorage(
         Err(r) => return r,
     };
     let prefix_opt = opt_string(prefix);
+    let cred_value_opt = opt_string(credential_value);
 
     let runtime = match make_runtime() {
         Ok(rt) => rt,
@@ -186,8 +253,45 @@ pub unsafe extern "C" fn zarrsIcechunkAzureStorage(
         }
     };
 
+    let credentials = match credential_type {
+        1 => {
+            // AccessKey
+            if let Some(key) = cred_value_opt {
+                Some(icechunk::config::AzureCredentials::Static(
+                    icechunk::config::AzureStaticCredentials::AccessKey(key),
+                ))
+            } else {
+                Some(icechunk::config::AzureCredentials::FromEnv)
+            }
+        }
+        2 => {
+            // SASToken
+            if let Some(token) = cred_value_opt {
+                Some(icechunk::config::AzureCredentials::Static(
+                    icechunk::config::AzureStaticCredentials::SASToken(token),
+                ))
+            } else {
+                Some(icechunk::config::AzureCredentials::FromEnv)
+            }
+        }
+        3 => {
+            // BearerToken
+            if let Some(token) = cred_value_opt {
+                Some(icechunk::config::AzureCredentials::Static(
+                    icechunk::config::AzureStaticCredentials::BearerToken(token),
+                ))
+            } else {
+                Some(icechunk::config::AzureCredentials::FromEnv)
+            }
+        }
+        _ => {
+            // 0 or default = FromEnv
+            Some(icechunk::config::AzureCredentials::FromEnv)
+        }
+    };
+
     let result = runtime.block_on(async {
-        icechunk::storage::new_azure_blob_storage(account_str, container_str, prefix_opt, None, None)
+        icechunk::storage::new_azure_blob_storage(account_str, container_str, prefix_opt, credentials, None)
             .await
             .map_err(|e| format!("Azure storage error: {e}"))
     });
@@ -482,6 +586,256 @@ pub unsafe extern "C" fn zarrsIcechunkRepoListTags(
 }
 
 // ---------------------------------------------------------------------------
+// Branch & tag management
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoCreateBranch(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+    snapshot_id_str: *const c_char,
+    pResult: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let snap_str = match str_from_ptr(snapshot_id_str) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let snap_id: icechunk::format::SnapshotId = match icechunk::format::SnapshotId::try_from(snap_str.as_str()) {
+        Ok(id) => id,
+        Err(e) => {
+            set_error(format!("Invalid snapshot ID: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .create_branch(&name_str, &snap_id)
+            .await
+            .map_err(|e| format!("create_branch error: {e}"))
+    });
+
+    match result {
+        Ok(_) => {
+            if !pResult.is_null() {
+                let cstr = CString::new("").unwrap_or_default();
+                unsafe { *pResult = cstr.into_raw() };
+            }
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoDeleteBranch(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .delete_branch(&name_str)
+            .await
+            .map_err(|e| format!("delete_branch error: {e}"))
+    });
+
+    match result {
+        Ok(_) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoCreateTag(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+    snapshot_id_str: *const c_char,
+    pResult: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let snap_str = match str_from_ptr(snapshot_id_str) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let snap_id: icechunk::format::SnapshotId = match icechunk::format::SnapshotId::try_from(snap_str.as_str()) {
+        Ok(id) => id,
+        Err(e) => {
+            set_error(format!("Invalid snapshot ID: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .create_tag(&name_str, &snap_id)
+            .await
+            .map_err(|e| format!("create_tag error: {e}"))
+    });
+
+    match result {
+        Ok(_) => {
+            if !pResult.is_null() {
+                let cstr = CString::new("").unwrap_or_default();
+                unsafe { *pResult = cstr.into_raw() };
+            }
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoDeleteTag(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .delete_tag(&name_str)
+            .await
+            .map_err(|e| format!("delete_tag error: {e}"))
+    });
+
+    match result {
+        Ok(_) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoLookupBranch(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .lookup_branch(&name_str)
+            .await
+            .map_err(|e| format!("lookup_branch error: {e}"))
+    });
+
+    match result {
+        Ok(snap_id) => {
+            let id_str = snap_id.to_string();
+            match CString::new(id_str) {
+                Ok(cstr) => {
+                    unsafe { *pSnapshotId = cstr.into_raw() };
+                    ZarrsResult::ZARRS_SUCCESS
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    ZarrsResult::ZARRS_ERROR_STORAGE
+                }
+            }
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoLookupTag(
+    repo: *mut IcRepoHandle,
+    name: *const c_char,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let name_str = match str_from_ptr(name) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let rh = unsafe { &*repo };
+    let result = rh.runtime.block_on(async {
+        rh.repo
+            .lookup_tag(&name_str)
+            .await
+            .map_err(|e| format!("lookup_tag error: {e}"))
+    });
+
+    match result {
+        Ok(snap_id) => {
+            let id_str = snap_id.to_string();
+            match CString::new(id_str) {
+                Ok(cstr) => {
+                    unsafe { *pSnapshotId = cstr.into_raw() };
+                    ZarrsResult::ZARRS_SUCCESS
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    ZarrsResult::ZARRS_ERROR_STORAGE
+                }
+            }
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
@@ -529,14 +883,15 @@ pub unsafe extern "C" fn zarrsIcechunkReadonlySession(
             .await
             .map_err(|e| format!("readonly_session error: {e}"))?;
 
-        let session_arc = Arc::new(tokio::sync::RwLock::new(session));
-        let store = icechunk::Store::from_session(session_arc).await;
-        Ok::<_, String>(store)
+        let session_arc: Arc<tokio::sync::RwLock<icechunk::session::Session>> =
+            Arc::new(tokio::sync::RwLock::new(session));
+        let store = icechunk::Store::from_session(session_arc.clone()).await;
+        Ok::<_, String>((store, session_arc))
     });
 
     match result {
-        Ok(store) => {
-            let handle = Box::new(IcSessionHandle { store, runtime });
+        Ok((store, session_arc)) => {
+            let handle = Box::new(IcSessionHandle { store, session: session_arc, runtime });
             unsafe { *pSession = Box::into_raw(handle) };
             ZarrsResult::ZARRS_SUCCESS
         }
@@ -573,14 +928,15 @@ pub unsafe extern "C" fn zarrsIcechunkWritableSession(
             .await
             .map_err(|e| format!("writable_session error: {e}"))?;
 
-        let session_arc = Arc::new(tokio::sync::RwLock::new(session));
-        let store = icechunk::Store::from_session(session_arc).await;
-        Ok::<_, String>(store)
+        let session_arc: Arc<tokio::sync::RwLock<icechunk::session::Session>> =
+            Arc::new(tokio::sync::RwLock::new(session));
+        let store = icechunk::Store::from_session(session_arc.clone()).await;
+        Ok::<_, String>((store, session_arc))
     });
 
     match result {
-        Ok(store) => {
-            let handle = Box::new(IcSessionHandle { store, runtime });
+        Ok((store, session_arc)) => {
+            let handle = Box::new(IcSessionHandle { store, session: session_arc, runtime });
             unsafe { *pSession = Box::into_raw(handle) };
             ZarrsResult::ZARRS_SUCCESS
         }
@@ -651,5 +1007,77 @@ pub unsafe extern "C" fn zarrsIcechunkSessionReadOnly(
     let sh = unsafe { &*session };
     let ro = sh.runtime.block_on(async { sh.store.read_only().await });
     unsafe { *pReadOnly = if ro { 1 } else { 0 } };
+    ZarrsResult::ZARRS_SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// Session commit & changes
+// ---------------------------------------------------------------------------
+
+/// Commit a writable session with a message, returning a snapshot ID string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionCommit(
+    session: *mut IcSessionHandle,
+    message: *const c_char,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+
+    let msg_str = match str_from_ptr(message) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        let mut session_guard: tokio::sync::RwLockWriteGuard<'_, icechunk::session::Session> =
+            sh.session.write().await;
+        session_guard
+            .commit(&msg_str, None)
+            .await
+            .map_err(|e| format!("commit error: {e}"))
+    });
+
+    match result {
+        Ok(snap_id) => {
+            let id_str = format!("{snap_id}");
+            match CString::new(id_str) {
+                Ok(cstr) => {
+                    unsafe { *pSnapshotId = cstr.into_raw() };
+                    ZarrsResult::ZARRS_SUCCESS
+                }
+                Err(e) => {
+                    set_error(e.to_string());
+                    ZarrsResult::ZARRS_ERROR_STORAGE
+                }
+            }
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// Check if a session has uncommitted changes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionHasChanges(
+    session: *mut IcSessionHandle,
+    pHasChanges: *mut i32,
+) -> ZarrsResult {
+    if session.is_null() || pHasChanges.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+
+    let sh = unsafe { &*session };
+    let has_changes = sh.runtime.block_on(async {
+        let session_guard: tokio::sync::RwLockReadGuard<'_, icechunk::session::Session> =
+            sh.session.read().await;
+        session_guard.has_uncommitted_changes()
+    });
+
+    unsafe { *pHasChanges = if has_changes { 1 } else { 0 } };
     ZarrsResult::ZARRS_SUCCESS
 }

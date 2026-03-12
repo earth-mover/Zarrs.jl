@@ -10,10 +10,11 @@
 #   julia --project examples/icechunk_hrrr.jl
 
 using Zarrs
+using Zarrs.Icechunk
 
 # --- Connect to the Icechunk repository ---
 # Step 1: Configure S3 storage pointing to the Icechunk repo
-storage = IcechunkS3Storage(
+storage = S3Storage(
     bucket    = "dynamical-noaa-hrrr",
     prefix    = "noaa-hrrr-forecast-48-hour/v0.1.0.icechunk",
     region    = "us-west-2",
@@ -22,7 +23,7 @@ storage = IcechunkS3Storage(
 
 # Step 2: Open the repository
 println("Opening Icechunk repository...")
-repo = IcechunkRepository(storage)
+repo = Repository(storage)
 
 # Step 3: Create a read-only session on the main branch
 session = readonly_session(repo; branch="main")

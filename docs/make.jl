@@ -11,6 +11,8 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
+        "Cloud & Remote Access" => "cloud.md",
+        "Icechunk" => "icechunk.md",
         "API Reference" => "api.md",
     ],
 )

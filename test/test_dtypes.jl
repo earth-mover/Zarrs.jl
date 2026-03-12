@@ -30,4 +30,47 @@ using Zarrs
             @test z2[:, :] == data
         end
     end
+
+    @testset "NaN fill value" begin
+        mktempdir() do dir
+            z = zcreate(Float64, 4, 4; chunks=(2, 2),
+                path=joinpath(dir, "nan.zarr"),
+                compressor="none",
+                fill_value=NaN)
+            # Read unwritten chunk — should return NaN fill value
+            vals = z[:, :]
+            @test all(isnan, vals)
+
+            # Write and read back
+            data = rand(Float64, 4, 4)
+            z[:, :] = data
+            @test z[:, :] ≈ data
+        end
+    end
+
+    @testset "Inf fill value" begin
+        mktempdir() do dir
+            z = zcreate(Float32, 4, 4; chunks=(2, 2),
+                path=joinpath(dir, "inf.zarr"),
+                compressor="none",
+                fill_value=Inf32)
+            vals = z[:, :]
+            @test all(isinf, vals)
+
+            data = rand(Float32, 4, 4)
+            z[:, :] = data
+            @test z[:, :] ≈ data
+        end
+    end
+
+    @testset "Negative Inf fill value" begin
+        mktempdir() do dir
+            z = zcreate(Float64, 4; chunks=(4,),
+                path=joinpath(dir, "neginf.zarr"),
+                compressor="none",
+                fill_value=-Inf)
+            vals = z[:]
+            @test all(x -> x == -Inf, vals)
+        end
+    end
 end

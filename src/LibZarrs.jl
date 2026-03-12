@@ -457,7 +457,10 @@ end
 
 function zarrs_icechunk_s3_storage(bucket::AbstractString, prefix::AbstractString,
                                    region::AbstractString, anonymous::Bool,
-                                   endpoint_url::AbstractString, allow_http::Bool)
+                                   endpoint_url::AbstractString, allow_http::Bool,
+                                   access_key_id::AbstractString,
+                                   secret_access_key::AbstractString,
+                                   session_token::AbstractString)
     handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsIcechunkS3Storage(
         bucket::Cstring,
@@ -466,17 +469,23 @@ function zarrs_icechunk_s3_storage(bucket::AbstractString, prefix::AbstractStrin
         Cint(anonymous)::Cint,
         endpoint_url::Cstring,
         Cint(allow_http)::Cint,
+        access_key_id::Cstring,
+        secret_access_key::Cstring,
+        session_token::Cstring,
         handle_ptr::Ptr{Ptr{Cvoid}}
     )::ZarrsResult
     check_error(result)
     return handle_ptr[]
 end
 
-function zarrs_icechunk_gcs_storage(bucket::AbstractString, prefix::AbstractString)
+function zarrs_icechunk_gcs_storage(bucket::AbstractString, prefix::AbstractString,
+                                    credential_type::Cint, credential_value::AbstractString)
     handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsIcechunkGcsStorage(
         bucket::Cstring,
         prefix::Cstring,
+        credential_type::Cint,
+        credential_value::Cstring,
         handle_ptr::Ptr{Ptr{Cvoid}}
     )::ZarrsResult
     check_error(result)
@@ -484,12 +493,15 @@ function zarrs_icechunk_gcs_storage(bucket::AbstractString, prefix::AbstractStri
 end
 
 function zarrs_icechunk_azure_storage(account::AbstractString, container::AbstractString,
-                                      prefix::AbstractString)
+                                      prefix::AbstractString,
+                                      credential_type::Cint, credential_value::AbstractString)
     handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsIcechunkAzureStorage(
         account::Cstring,
         container::Cstring,
         prefix::Cstring,
+        credential_type::Cint,
+        credential_value::Cstring,
         handle_ptr::Ptr{Ptr{Cvoid}}
     )::ZarrsResult
     check_error(result)
@@ -583,6 +595,78 @@ function zarrs_icechunk_repo_list_tags(repo::Ptr{Cvoid})
     return s
 end
 
+function zarrs_icechunk_repo_create_branch(repo::Ptr{Cvoid}, name::AbstractString,
+                                           snapshot_id::AbstractString)
+    result_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoCreateBranch(
+        repo::Ptr{Cvoid},
+        name::Cstring,
+        snapshot_id::Cstring,
+        result_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    if result_ptr[] != C_NULL
+        @ccall libzarrs_jl[].zarrsFreeString(result_ptr[]::Ptr{UInt8})::Cvoid
+    end
+end
+
+function zarrs_icechunk_repo_delete_branch(repo::Ptr{Cvoid}, name::AbstractString)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoDeleteBranch(
+        repo::Ptr{Cvoid},
+        name::Cstring
+    )::ZarrsResult
+    check_error(result)
+end
+
+function zarrs_icechunk_repo_create_tag(repo::Ptr{Cvoid}, name::AbstractString,
+                                        snapshot_id::AbstractString)
+    result_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoCreateTag(
+        repo::Ptr{Cvoid},
+        name::Cstring,
+        snapshot_id::Cstring,
+        result_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    if result_ptr[] != C_NULL
+        @ccall libzarrs_jl[].zarrsFreeString(result_ptr[]::Ptr{UInt8})::Cvoid
+    end
+end
+
+function zarrs_icechunk_repo_delete_tag(repo::Ptr{Cvoid}, name::AbstractString)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoDeleteTag(
+        repo::Ptr{Cvoid},
+        name::Cstring
+    )::ZarrsResult
+    check_error(result)
+end
+
+function zarrs_icechunk_repo_lookup_branch(repo::Ptr{Cvoid}, name::AbstractString)
+    snap_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoLookupBranch(
+        repo::Ptr{Cvoid},
+        name::Cstring,
+        snap_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    s = unsafe_string(snap_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(snap_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
+function zarrs_icechunk_repo_lookup_tag(repo::Ptr{Cvoid}, name::AbstractString)
+    snap_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkRepoLookupTag(
+        repo::Ptr{Cvoid},
+        name::Cstring,
+        snap_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    s = unsafe_string(snap_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(snap_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
 function zarrs_icechunk_readonly_session(repo::Ptr{Cvoid}, version_type::Cint,
                                          version_value::AbstractString)
     session_ptr = Ref{Ptr{Cvoid}}(C_NULL)
@@ -622,6 +706,29 @@ function zarrs_icechunk_session_get_storage(session::Ptr{Cvoid})
     )::ZarrsResult
     check_error(result)
     return storage_ptr[]
+end
+
+function zarrs_icechunk_session_commit(session::Ptr{Cvoid}, message::AbstractString)
+    snap_ptr = Ref{Ptr{UInt8}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsIcechunkSessionCommit(
+        session::Ptr{Cvoid},
+        message::Cstring,
+        snap_ptr::Ptr{Ptr{UInt8}}
+    )::ZarrsResult
+    check_error(result)
+    s = unsafe_string(snap_ptr[])
+    @ccall libzarrs_jl[].zarrsFreeString(snap_ptr[]::Ptr{UInt8})::Cvoid
+    return s
+end
+
+function zarrs_icechunk_session_has_changes(session::Ptr{Cvoid})
+    has_changes = Ref{Cint}(0)
+    result = @ccall libzarrs_jl[].zarrsIcechunkSessionHasChanges(
+        session::Ptr{Cvoid},
+        has_changes::Ptr{Cint}
+    )::ZarrsResult
+    check_error(result)
+    return Bool(has_changes[])
 end
 
 end # module LibZarrs

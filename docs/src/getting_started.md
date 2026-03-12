@@ -108,6 +108,33 @@ attrs = get_attributes(z)
 println(attrs["units"])  # "kelvin"
 ```
 
+## Icechunk (Cloud Versioned Storage)
+
+Read and write versioned Zarr data on cloud object stores using Icechunk:
+
+```julia
+using Zarrs
+using Zarrs.Icechunk
+
+# Open an existing Icechunk repository on S3
+storage = S3Storage(bucket="my-bucket", prefix="my-repo", region="us-west-2")
+repo = Repository(storage)
+session = readonly_session(repo; branch="main")
+g = zopen(session)
+data = g["temperature"][:, :, 1]
+```
+
+For writing:
+```julia
+repo = Repository(MemoryStorage(); mode=:create)
+session = writable_session(repo, "main")
+# ... create arrays and write data ...
+snapshot_id = commit(session, "initial data")
+```
+
+See the [Icechunk documentation](@ref) for full details on storage backends,
+credentials, branches, and tags.
+
 ## DiskArrays Integration
 
 `ZarrsArray` implements `DiskArrays.AbstractDiskArray`, so standard Julia array

@@ -35,13 +35,60 @@ jobs:
       # Install Rust toolchain for building the companion crate
       - uses: dtolnay/rust-toolchain@stable
 
-      # Build the Rust cdylib
+      # Build the Rust cdylib (with icechunk feature, enabled by default)
       - name: Build libzarrs_jl
         run: julia --project deps/build.jl
 
       # Run core tests
       - name: Run tests
         uses: julia-actions/julia-runtest@v1
+
+  test-icechunk:
+    name: Icechunk tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: julia-actions/cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build libzarrs_jl
+        run: julia --project deps/build.jl
+
+      - name: Instantiate test environment
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Run Icechunk tests
+        run: julia --project -e '
+          using Pkg; Pkg.test(test_args=["icechunk"])'
+
+  test-no-icechunk:
+    name: Tests without icechunk feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: julia-actions/cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build libzarrs_jl without icechunk
+        run: |
+          cd deps/zarrs_jl
+          cargo build --release --no-default-features
+          cd ../..
+          julia --project deps/build.jl
+
+      - name: Run core tests (no icechunk)
+        run: julia --project -e '
+          using Pkg; Pkg.test(test_args=["core"])'
 
   compat:
     name: Cross-language compatibility
