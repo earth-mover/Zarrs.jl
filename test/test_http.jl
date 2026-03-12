@@ -14,18 +14,19 @@ using Zarrs
         @test storage.ptr != C_NULL
     end
 
-    @testset "read remote Zarr array" begin
-        # Read a public Zarr V2 array from the IDR (Image Data Resource)
-        url = "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/idr0062A/6001240.zarr/0"
+    @testset "read remote Zarr array (CMIP6)" begin
+        # Read a public CMIP6 Zarr V2 array from AWS Open Data
+        url = "https://cmip6-pds.s3.amazonaws.com/CMIP6/CMIP/NCAR/CESM2/historical/r10i1p1f1/day/tas/gn/v20190313/tas"
         try
             z = zopen(url)
             @test z isa ZarrsArray
-            @test ndims(z) == 4
-            @test eltype(z) == UInt16
+            @test ndims(z) == 3
+            @test eltype(z) == Float32
+            @test size(z) == (288, 192, 60226)
             # Read a small subset to verify data transfer
-            data = z[1:2, 1:2, 1, 1]
-            @test size(data) == (2, 2)
-            @test eltype(data) == UInt16
+            data = z[1:3, 1:3, 1]
+            @test size(data) == (3, 3)
+            @test all(isfinite, data)
         catch e
             # Network may not be available in all CI environments
             @info "HTTP read test skipped (network unavailable): $e"
