@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia-version }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version:
+          - "1.10"   # LTS
+          - "1"      # stable
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - uses: julia-actions/cache@v2
+
+      # Install Rust toolchain for building the companion crate
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Build the Rust cdylib
+      - name: Build libzarrs_jl
+        run: julia --project deps/build.jl
+
+      # Run core tests
+      - name: Run tests
+        uses: julia-actions/julia-runtest@v1
+
+  compat:
+    name: Cross-language compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - uses: julia-actions/cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Install uv for Python fixture generation
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build libzarrs_jl
+        run: julia --project deps/build.jl
+
+      - name: Instantiate test environment
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+
+      # Generate fixtures
+      - name: Generate Python fixtures
+        run: uv run test/fixtures/generate_python.py
+
+      - name: Generate Zarrs.jl fixtures
+        run: julia --project test/fixtures/generate_zarrs_jl.jl
+
+      # Run compatibility tests
+      - name: Python compatibility tests
+        run: julia --project -e '
+          using Pkg; Pkg.test(test_args=["compat_zarr_python"])'
+
+      - name: Zarrs.jl self-compatibility tests
+        run: julia --project -e '
+          using Pkg; Pkg.test(test_args=["compat_zarrs"])'

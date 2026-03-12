@@ -109,7 +109,7 @@ function _open_array(storage::ZarrsStorageHandle, array_path::AbstractString, st
 end
 
 function _extract_chunk_shape(metadata)
-    zf = get(metadata, "zarr_format", 3)
+    zf = metadata isa AbstractDict && haskey(metadata, "zarr_format") ? metadata["zarr_format"] : 3
     if zf == 2
         return metadata["chunks"]
     else
@@ -117,9 +117,12 @@ function _extract_chunk_shape(metadata)
         chunk_grid = metadata["chunk_grid"]
         chunk_shape = chunk_grid["configuration"]["chunk_shape"]
         # If sharded, the inner chunk_shape is in the sharding codec config
-        codecs = get(metadata, "codecs", [])
+        codecs = metadata isa AbstractDict && haskey(metadata, "codecs") ? metadata["codecs"] : []
         for codec in codecs
-            if get(codec, "name", "") == "sharding_indexed"
+            # Codecs can be strings (shorthand) or dicts
+            codec isa AbstractString && continue
+            name = codec isa AbstractDict && haskey(codec, "name") ? codec["name"] : ""
+            if name == "sharding_indexed"
                 config = codec["configuration"]
                 return config["chunk_shape"]
             end

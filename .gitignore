@@ -4,3 +4,9 @@ deps/zarrs_jl/target/
 *.so
 *.dll
 Manifest.toml
+
+# Generated test fixtures
+test/fixtures/v3_python/
+test/fixtures/v2_python/
+test/fixtures/v3_zarrs_jl/
+test/fixtures/v2_zarr_jl/
