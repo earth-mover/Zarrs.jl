@@ -54,4 +54,4 @@ z3 = zopen("https://example.com/data.zarr")
 
 ## Status
 
-Zarrs.jl is at v0.1.0 and under active development. Source code and issue tracker: [github.com/zarrs/zarrs-julia](https://github.com/zarrs/zarrs-julia).
+Zarrs.jl is at v0.1.0 and under active development. Source code and issue tracker: [github.com/earth-mover/Zarrs.jl](https://github.com/earth-mover/Zarrs.jl).

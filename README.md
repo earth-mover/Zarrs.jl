@@ -1,8 +1,8 @@
 # Zarrs.jl
 
-[![CI](https://github.com/zarrs/zarrs-julia/actions/workflows/ci.yml/badge.svg)](https://github.com/zarrs/zarrs-julia/actions/workflows/ci.yml)
-[![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://zarrs.github.io/zarrs-julia/stable)
-[![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://zarrs.github.io/zarrs-julia/dev)
+[![CI](https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/earth-mover/Zarrs.jl/actions/workflows/ci.yml)
+[![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://earth-mover.github.io/Zarrs.jl/stable)
+[![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://earth-mover.github.io/Zarrs.jl/dev)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE)
 
 High-performance [Zarr](https://zarr.dev/) V2 and V3 arrays for Julia, powered by the [zarrs](https://github.com/zarrs/zarrs) Rust library.
@@ -72,7 +72,7 @@ session = readonly_session(repo; tag="v1.0")
 g = zopen(session)
 ```
 
-See the [Icechunk documentation](https://zarrs.github.io/zarrs-julia/stable/icechunk/) for full details on storage backends, credentials, branches, and tags.
+See the [Icechunk documentation](https://earth-mover.github.io/Zarrs.jl/stable/icechunk/) for full details on storage backends, credentials, branches, and tags.
 
 ## Examples
 
@@ -83,7 +83,7 @@ See the [Icechunk documentation](https://zarrs.github.io/zarrs-julia/stable/icec
 
 ## Documentation
 
-Full documentation is available at [zarrs.github.io/zarrs-julia](https://zarrs.github.io/zarrs-julia/).
+Full documentation is available at [earth-mover.github.io/Zarrs.jl](https://earth-mover.github.io/Zarrs.jl/).
 
 ## Contributing
 

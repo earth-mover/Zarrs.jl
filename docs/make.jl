@@ -6,7 +6,7 @@ makedocs(;
     sitename="Zarrs.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://zarrs.github.io/zarrs-julia",
+        canonical="https://earth-mover.github.io/Zarrs.jl",
     ),
     pages=[
         "Home" => "index.md",
@@ -18,6 +18,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/zarrs/zarrs-julia",
+    repo="github.com/earth-mover/Zarrs.jl",
     devbranch="main",
 )
