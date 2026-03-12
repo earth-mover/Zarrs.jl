@@ -1026,3 +1026,297 @@ pub unsafe extern "C" fn zarrsJlArrayEraseChunk(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Icechunk storage adapter
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "icechunk")]
+mod icechunk_adapter {
+    use super::*;
+
+    use zarrs_storage::{
+        StorageError, StoreKey, StoreKeys, StoreKeysPrefixes, StorePrefix,
+        byte_range::ByteRange as ZarsByteRange,
+        AsyncMaybeBytesIterator, MaybeBytes, Bytes,
+        byte_range::ByteRangeIterator, OffsetBytesIterator,
+    };
+
+    /// Adapter wrapping icechunk::Store to implement zarrs async storage traits.
+    pub struct IcechunkAdapter {
+        store: icechunk::Store,
+    }
+
+    impl IcechunkAdapter {
+        pub fn new(store: icechunk::Store) -> Self {
+            Self { store }
+        }
+    }
+
+    fn to_icechunk_byte_range(range: &ZarsByteRange) -> icechunk::format::ByteRange {
+        match range {
+            ZarsByteRange::FromStart(offset, Some(len)) => {
+                icechunk::format::ByteRange::from_offset_with_length(*offset, *len)
+            }
+            ZarsByteRange::FromStart(offset, None) => {
+                icechunk::format::ByteRange::from_offset(*offset)
+            }
+            ZarsByteRange::Suffix(len) => {
+                icechunk::format::ByteRange::Last(*len)
+            }
+        }
+    }
+
+    fn ic_err(e: impl std::fmt::Display) -> StorageError {
+        StorageError::Other(e.to_string())
+    }
+
+    #[async_trait::async_trait]
+    impl zarrs_storage::AsyncReadableStorageTraits for IcechunkAdapter {
+        async fn get(&self, key: &StoreKey) -> Result<MaybeBytes, StorageError> {
+            match self.store.get(key.as_str(), &icechunk::format::ByteRange::ALL).await {
+                Ok(bytes) => Ok(Some(Bytes::from(bytes.to_vec()))),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("not found") || msg.contains("NotFound") {
+                        Ok(None)
+                    } else {
+                        Err(ic_err(e))
+                    }
+                }
+            }
+        }
+
+        async fn get_partial_many<'a>(
+            &'a self,
+            key: &StoreKey,
+            byte_ranges: ByteRangeIterator<'a>,
+        ) -> Result<AsyncMaybeBytesIterator<'a>, StorageError> {
+            let ranges: Vec<ZarsByteRange> = byte_ranges.collect();
+            let mut results = Vec::with_capacity(ranges.len());
+            for range in &ranges {
+                let ic_range = to_icechunk_byte_range(range);
+                match self.store.get(key.as_str(), &ic_range).await {
+                    Ok(bytes) => results.push(Ok(Bytes::from(bytes.to_vec()))),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("not found") || msg.contains("NotFound") {
+                            return Ok(None);
+                        }
+                        return Err(ic_err(e));
+                    }
+                }
+            }
+            let iter = futures::stream::iter(results);
+            Ok(Some(Box::pin(iter)))
+        }
+
+        async fn size_key(&self, key: &StoreKey) -> Result<Option<u64>, StorageError> {
+            match self.store.get(key.as_str(), &icechunk::format::ByteRange::ALL).await {
+                Ok(bytes) => Ok(Some(bytes.len() as u64)),
+                Err(_) => Ok(None),
+            }
+        }
+
+        fn supports_get_partial(&self) -> bool {
+            true
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl zarrs_storage::AsyncListableStorageTraits for IcechunkAdapter {
+        async fn list(&self) -> Result<StoreKeys, StorageError> {
+            self.list_prefix(&StorePrefix::root()).await
+        }
+
+        async fn list_prefix(&self, prefix: &StorePrefix) -> Result<StoreKeys, StorageError> {
+            use futures::TryStreamExt;
+            let prefix_str = prefix.as_str().trim_end_matches('/');
+            let stream = self.store.list_dir(prefix_str).await.map_err(ic_err)?;
+            let items: Vec<String> = stream.try_collect().await.map_err(ic_err)?;
+            let keys: Vec<StoreKey> = items.iter()
+                .filter_map(|s| StoreKey::try_from(s.as_str()).ok())
+                .collect();
+            Ok(keys)
+        }
+
+        async fn list_dir(&self, prefix: &StorePrefix) -> Result<StoreKeysPrefixes, StorageError> {
+            use futures::TryStreamExt;
+            let prefix_str = prefix.as_str().trim_end_matches('/');
+            let stream = self.store.list_dir_items(prefix_str).await.map_err(ic_err)?;
+            let items: Vec<icechunk::store::ListDirItem> = stream.try_collect().await.map_err(ic_err)?;
+
+            let mut keys = Vec::new();
+            let mut prefixes = Vec::new();
+            for item in items {
+                match item {
+                    icechunk::store::ListDirItem::Key(k) => {
+                        if let Ok(key) = StoreKey::try_from(k.as_str()) {
+                            keys.push(key);
+                        }
+                    }
+                    icechunk::store::ListDirItem::Prefix(p) => {
+                        // Ensure prefix has trailing slash for zarrs StorePrefix
+                        let p_with_slash = if p.ends_with('/') {
+                            p
+                        } else {
+                            format!("{p}/")
+                        };
+                        if let Ok(pfx) = StorePrefix::try_from(p_with_slash.as_str()) {
+                            prefixes.push(pfx);
+                        }
+                    }
+                }
+            }
+            Ok(StoreKeysPrefixes::new(keys, prefixes))
+        }
+
+        async fn size_prefix(&self, _prefix: &StorePrefix) -> Result<u64, StorageError> {
+            Err(StorageError::Unsupported("size_prefix".to_string()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl zarrs_storage::AsyncWritableStorageTraits for IcechunkAdapter {
+        async fn set(&self, key: &StoreKey, value: Bytes) -> Result<(), StorageError> {
+            self.store.set(key.as_str(), value.into()).await.map_err(ic_err)
+        }
+
+        async fn set_partial_many<'a>(
+            &'a self,
+            key: &StoreKey,
+            offset_values: OffsetBytesIterator<'a>,
+        ) -> Result<(), StorageError> {
+            zarrs_storage::async_store_set_partial_many(self, key, offset_values).await
+        }
+
+        async fn erase(&self, key: &StoreKey) -> Result<(), StorageError> {
+            self.store.delete(key.as_str()).await.map_err(ic_err)
+        }
+
+        async fn erase_prefix(&self, prefix: &StorePrefix) -> Result<(), StorageError> {
+            self.store.delete_dir(prefix.as_str()).await.map_err(ic_err)
+        }
+
+        fn supports_set_partial(&self) -> bool {
+            false
+        }
+    }
+
+    /// Open an Icechunk repository from S3 and create a zarrs-compatible storage handle.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn zarrsCreateStorageIcechunk(
+        bucket: *const c_char,
+        prefix: *const c_char,
+        region: *const c_char,
+        anonymous: i32,
+        branch: *const c_char,
+        pStorage: *mut *mut StorageHandle,
+    ) -> ZarrsResult {
+        if pStorage.is_null() {
+            return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+        }
+
+        let bucket_str = match str_from_ptr(bucket) {
+            Ok(s) => s.to_string(),
+            Err(r) => return r,
+        };
+
+        let prefix_str = if prefix.is_null() {
+            None
+        } else {
+            match str_from_ptr(prefix) {
+                Ok(s) if s.is_empty() => None,
+                Ok(s) => Some(s.to_string()),
+                Err(r) => return r,
+            }
+        };
+
+        let region_opt = if region.is_null() {
+            None
+        } else {
+            match str_from_ptr(region) {
+                Ok(s) if s.is_empty() => None,
+                Ok(s) => Some(s.to_string()),
+                Err(_) => None,
+            }
+        };
+
+        let branch_str = if branch.is_null() {
+            "main".to_string()
+        } else {
+            match str_from_ptr(branch) {
+                Ok(s) if s.is_empty() => "main".to_string(),
+                Ok(s) => s.to_string(),
+                Err(_) => "main".to_string(),
+            }
+        };
+
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                set_error(format!("Failed to create tokio runtime: {e}"));
+                return ZarrsResult::ZARRS_ERROR_STORAGE;
+            }
+        };
+
+        let result = runtime.block_on(async {
+            let s3_opts = icechunk::config::S3Options {
+                region: region_opt,
+                endpoint_url: None,
+                anonymous: anonymous != 0,
+                allow_http: false,
+                force_path_style: false,
+                network_stream_timeout_seconds: Some(30),
+                requester_pays: false,
+            };
+
+            let credentials = if anonymous != 0 {
+                Some(icechunk::config::S3Credentials::Anonymous)
+            } else {
+                Some(icechunk::config::S3Credentials::FromEnv)
+            };
+
+            let storage = icechunk::new_s3_storage(
+                s3_opts,
+                bucket_str,
+                prefix_str,
+                credentials,
+            ).map_err(|e| format!("S3 storage error: {e}"))?;
+
+            let repo = icechunk::Repository::open(
+                None,
+                storage,
+                std::collections::HashMap::new(),
+            ).await.map_err(|e| format!("Repository open error: {e}"))?;
+
+            let version = icechunk::repository::VersionInfo::BranchTipRef(branch_str);
+            let session = repo.readonly_session(&version)
+                .await
+                .map_err(|e| format!("Session error: {e}"))?;
+
+            let session_arc = std::sync::Arc::new(tokio::sync::RwLock::new(session));
+            let ic_store = icechunk::Store::from_session(session_arc).await;
+
+            Ok::<_, String>(ic_store)
+        });
+
+        match result {
+            Ok(ic_store) => {
+                let adapter = Arc::new(IcechunkAdapter::new(ic_store));
+                let block_on = TokioBlockOn(runtime);
+                let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(adapter, block_on));
+
+                let handle = Box::new(StorageHandle {
+                    store: sync_store,
+                });
+                unsafe { *pStorage = Box::into_raw(handle) };
+                ZarrsResult::ZARRS_SUCCESS
+            }
+            Err(msg) => {
+                set_error(msg);
+                ZarrsResult::ZARRS_ERROR_STORAGE
+            }
+        }
+    }
+}

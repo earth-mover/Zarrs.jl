@@ -68,16 +68,45 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    create_storage(path::AbstractString) -> ZarrsStorageHandle
+    create_storage(path::AbstractString; kwargs...) -> ZarrsStorageHandle
 
 Create a storage handle for the given path or URL.
-Supports filesystem paths and HTTP/HTTPS URLs.
+Supports filesystem paths, HTTP/HTTPS URLs, and Icechunk S3 stores.
+
+For Icechunk stores, use `icechunk://bucket/prefix` or pass `s3://bucket/prefix`
+with `icechunk=true`.
+
+# Keyword Arguments
+- `anonymous::Bool=false`: Use anonymous credentials for S3/Icechunk.
+- `region::String=""`: AWS region for S3/Icechunk.
+- `branch::String="main"`: Icechunk branch to read.
+- `icechunk::Bool=false`: Force Icechunk mode for S3 URLs.
 """
-function create_storage(path::AbstractString)
-    if startswith(path, "http://") || startswith(path, "https://")
+function create_storage(path::AbstractString;
+                        anonymous::Bool=false,
+                        region::String="",
+                        branch::String="main",
+                        icechunk::Bool=false)
+    if startswith(path, "icechunk://")
+        # icechunk://bucket/prefix
+        rest = path[length("icechunk://") + 1:end]
+        bucket, prefix = _split_s3_path(rest)
+        ptr = LibZarrs.zarrs_create_storage_icechunk(bucket, prefix, region, anonymous, branch)
+    elseif startswith(path, "s3://") && icechunk
+        rest = path[length("s3://") + 1:end]
+        bucket, prefix = _split_s3_path(rest)
+        ptr = LibZarrs.zarrs_create_storage_icechunk(bucket, prefix, region, anonymous, branch)
+    elseif startswith(path, "http://") || startswith(path, "https://")
         ptr = LibZarrs.zarrs_create_storage_http(path)
     else
         ptr = LibZarrs.zarrs_create_storage_filesystem(path)
     end
     return ZarrsStorageHandle(ptr)
+end
+
+function _split_s3_path(path::AbstractString)
+    parts = split(path, '/'; limit=2)
+    bucket = String(parts[1])
+    prefix = length(parts) > 1 ? String(parts[2]) : ""
+    return bucket, prefix
 end

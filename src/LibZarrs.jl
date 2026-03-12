@@ -70,6 +70,22 @@ function zarrs_create_storage_filesystem(path::AbstractString)
     return storage_ptr[]
 end
 
+function zarrs_create_storage_icechunk(bucket::AbstractString, prefix::AbstractString,
+                                      region::AbstractString, anonymous::Bool,
+                                      branch::AbstractString)
+    storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    result = @ccall libzarrs_jl[].zarrsCreateStorageIcechunk(
+        bucket::Cstring,
+        prefix::Cstring,
+        region::Cstring,
+        Cint(anonymous)::Cint,
+        branch::Cstring,
+        storage_ptr::Ptr{Ptr{Cvoid}}
+    )::ZarrsResult
+    check_error(result)
+    return storage_ptr[]
+end
+
 function zarrs_create_storage_http(url::AbstractString)
     storage_ptr = Ref{Ptr{Cvoid}}(C_NULL)
     result = @ccall libzarrs_jl[].zarrsCreateStorageHTTP(
