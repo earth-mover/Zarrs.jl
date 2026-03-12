@@ -10,7 +10,8 @@ A Zarr group backed by the zarrs Rust library. Supports hierarchical navigation.
 struct ZarrsGroup
     handle::ZarrsGroupHandle
     storage::ZarrsStorageHandle
-    path::String
+    path::String           # filesystem/store path
+    zarr_path::String      # path within the zarr store (e.g. "/" or "/subgroup")
     attrs::Dict{String,Any}
 end
 
@@ -28,12 +29,12 @@ end
 Open a child array or subgroup by name.
 """
 function Base.getindex(g::ZarrsGroup, key::AbstractString)
-    child_path = g.path == "/" ? "/$key" : "$(g.path)/$key"
+    child_zpath = g.zarr_path == "/" ? "/$key" : "$(g.zarr_path)/$key"
     # Try array first, then group
     try
-        return _open_array(g.storage, child_path, g.path)
+        return _open_array(g.storage, child_zpath, g.path)
     catch
-        return _open_group(g.storage, child_path, g.path)
+        return _open_group(g.storage, child_zpath, g.path)
     end
 end
 
@@ -43,7 +44,7 @@ end
 List child array and group names.
 """
 function Base.keys(g::ZarrsGroup)
-    prefix = g.path == "/" ? "/" : "$(g.path)/"
+    prefix = g.zarr_path == "/" ? "/" : "$(g.zarr_path)/"
     json_str = LibZarrs.zarrs_jl_storage_list_dir(g.storage.ptr, prefix)
     children = JSON.parse(json_str)
     # Strip trailing slashes and filter out metadata files
@@ -75,7 +76,7 @@ function zgroup(path::AbstractString; attrs::Dict{String,Any}=Dict{String,Any}()
     metadata = JSON.json(Dict("zarr_format" => 3, "node_type" => "group", "attributes" => attrs))
     group_ptr = LibZarrs.zarrs_create_group_rw(storage.ptr, "/", metadata)
     handle = ZarrsGroupHandle(group_ptr, storage)
-    return ZarrsGroup(handle, storage, path, attrs)
+    return ZarrsGroup(handle, storage, path, "/", attrs)
 end
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ function _open_group(storage::ZarrsStorageHandle, group_path::AbstractString, st
         attrs = Dict{String,Any}()
     end
 
-    return ZarrsGroup(handle, storage, store_path, attrs)
+    return ZarrsGroup(handle, storage, store_path, group_path, attrs)
 end
 
 # ---------------------------------------------------------------------------
