@@ -24,8 +24,15 @@ subset = z[1:100, 1:100]</code></pre><h3 id="Compressors"><a class="docs-heading
     path=&quot;/tmp/v2.zarr&quot;)</code></pre><h2 id="Opening-Existing-Arrays"><a class="docs-heading-anchor" href="#Opening-Existing-Arrays">Opening Existing Arrays</a><a id="Opening-Existing-Arrays-1"></a><a class="docs-heading-anchor-permalink" href="#Opening-Existing-Arrays" title="Permalink"></a></h2><p>Use <a href="../api/#Zarrs.zopen"><code>zopen</code></a> to open arrays in any supported format (V2 or V3):</p><pre><code class="language-julia hljs">z = zopen(&quot;/tmp/example.zarr&quot;)
 println(size(z))      # (1000, 1000)
 println(eltype(z))    # Float32
-data = z[:, :]</code></pre><h3 id="Remote-HTTP-Access"><a class="docs-heading-anchor" href="#Remote-HTTP-Access">Remote HTTP Access</a><a id="Remote-HTTP-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Remote-HTTP-Access" title="Permalink"></a></h3><p>Open Zarr arrays served over HTTP/HTTPS:</p><pre><code class="language-julia hljs">z = zopen(&quot;https://data.example.com/dataset.zarr&quot;)
-subset = z[1:10, 1:10]</code></pre><div class="admonition is-info" id="Note-998f41d5fde52df9"><header class="admonition-header">Note<a class="admonition-anchor" href="#Note-998f41d5fde52df9" title="Permalink"></a></header><div class="admonition-body"><p>HTTP storage is read-only. Attempting to write will result in an error.</p></div></div><h2 id="Groups"><a class="docs-heading-anchor" href="#Groups">Groups</a><a id="Groups-1"></a><a class="docs-heading-anchor-permalink" href="#Groups" title="Permalink"></a></h2><p>Create and navigate group hierarchies:</p><pre><code class="language-julia hljs"># Create a group
+data = z[:, :]</code></pre><h3 id="Remote-Access"><a class="docs-heading-anchor" href="#Remote-Access">Remote Access</a><a id="Remote-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Remote-Access" title="Permalink"></a></h3><p>Open Zarr arrays from remote backends:</p><pre><code class="language-julia hljs"># HTTP/HTTPS (read-only)
+z = zopen(&quot;https://data.example.com/dataset.zarr&quot;)
+subset = z[1:10, 1:10]
+
+# S3 (read/write)
+z = zopen(&quot;s3://my-bucket/data.zarr&quot;; region=&quot;us-west-2&quot;)
+
+# GCS (read/write)
+z = zopen(&quot;gs://my-bucket/data.zarr&quot;)</code></pre><p>See <a href="../cloud/#Cloud-and-Remote-Access">Cloud &amp; Remote Access</a> for full details on cloud backends and credentials.</p><h2 id="Groups"><a class="docs-heading-anchor" href="#Groups">Groups</a><a id="Groups-1"></a><a class="docs-heading-anchor-permalink" href="#Groups" title="Permalink"></a></h2><p>Create and navigate group hierarchies:</p><pre><code class="language-julia hljs"># Create a group
 g = zgroup(&quot;/tmp/experiment.zarr&quot;; attrs=Dict{String,Any}(&quot;project&quot; =&gt; &quot;demo&quot;))
 
 # Create arrays within the group
@@ -40,15 +47,14 @@ println(size(temp))</code></pre><h2 id="Attributes"><a class="docs-heading-ancho
 set_attributes!(z, Dict(&quot;units&quot; =&gt; &quot;kelvin&quot;, &quot;long_name&quot; =&gt; &quot;temperature&quot;))
 
 attrs = get_attributes(z)
-println(attrs[&quot;units&quot;])  # &quot;kelvin&quot;</code></pre><h2 id="Icechunk-(Cloud-Versioned-Storage)"><a class="docs-heading-anchor" href="#Icechunk-(Cloud-Versioned-Storage)">Icechunk (Cloud Versioned Storage)</a><a id="Icechunk-(Cloud-Versioned-Storage)-1"></a><a class="docs-heading-anchor-permalink" href="#Icechunk-(Cloud-Versioned-Storage)" title="Permalink"></a></h2><p>Read and write versioned Zarr data on cloud object stores using Icechunk:</p><pre><code class="language-julia hljs">using Zarrs
+println(attrs[&quot;units&quot;])  # &quot;kelvin&quot;</code></pre><h2 id="Icechunk-(Cloud-Versioned-Storage)"><a class="docs-heading-anchor" href="#Icechunk-(Cloud-Versioned-Storage)">Icechunk (Cloud Versioned Storage)</a><a id="Icechunk-(Cloud-Versioned-Storage)-1"></a><a class="docs-heading-anchor-permalink" href="#Icechunk-(Cloud-Versioned-Storage)" title="Permalink"></a></h2><p>Read versioned Zarr data using the URL pipeline syntax:</p><pre><code class="language-julia hljs">using Zarrs
+
+# Read from Icechunk on S3 via URL pipeline
+g = zopen(&quot;s3://my-bucket/my-repo|icechunk://branch.main/&quot;; region=&quot;us-west-2&quot;)
+data = g[&quot;temperature&quot;][:, :, 1]</code></pre><p>For write access, use the full <code>Zarrs.Icechunk</code> API:</p><pre><code class="language-julia hljs">using Zarrs
 using Zarrs.Icechunk
 
-# Open an existing Icechunk repository on S3
-storage = S3Storage(bucket=&quot;my-bucket&quot;, prefix=&quot;my-repo&quot;, region=&quot;us-west-2&quot;)
-repo = Repository(storage)
-session = readonly_session(repo; branch=&quot;main&quot;)
-g = zopen(session)
-data = g[&quot;temperature&quot;][:, :, 1]</code></pre><p>For writing:</p><pre><code class="language-julia hljs">repo = Repository(MemoryStorage(); mode=:create)
+repo = Repository(MemoryStorage(); mode=:create)
 session = writable_session(repo, &quot;main&quot;)
 # ... create arrays and write data ...
 snapshot_id = commit(session, &quot;initial data&quot;)</code></pre><p>See the <a href="../icechunk/#Icechunk-Integration">Icechunk Integration</a> page for full details on storage backends, credentials, branches, and tags.</p><h2 id="DiskArrays-Integration"><a class="docs-heading-anchor" href="#DiskArrays-Integration">DiskArrays Integration</a><a id="DiskArrays-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#DiskArrays-Integration" title="Permalink"></a></h2><p><code>ZarrsArray</code> implements <code>DiskArrays.AbstractDiskArray</code>, so standard Julia array operations work with lazy, chunked I/O:</p><pre><code class="language-julia hljs">using Statistics
@@ -61,4 +67,4 @@ z[:, :] = reshape(Int32.(1:10000), 100, 100)
 
 resize!(z, 200, 200)
 println(size(z))  # (200, 200)
-# Original data is preserved in z[1:100, 1:100]</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../cloud/">Cloud &amp; Remote Access »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 12 March 2026 19:11">Thursday 12 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+# Original data is preserved in z[1:100, 1:100]</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../cloud/">Cloud &amp; Remote Access »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 12 March 2026 19:55">Thursday 12 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
