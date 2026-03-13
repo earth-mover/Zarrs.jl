@@ -276,6 +276,7 @@ function dimnames(z::ZarrsArray{T,N}) where {T,N}
     metadata = JSON.parse(metadata_str)
     raw = get(metadata, "dimension_names", nothing)
     raw === nothing && return nothing
+    length(raw) == N || return nothing
     reversed = reverse(raw)
     return ntuple(i -> reversed[i] === nothing ? nothing : String(reversed[i]), N)
 end

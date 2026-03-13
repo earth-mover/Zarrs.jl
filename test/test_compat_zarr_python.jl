@@ -106,7 +106,7 @@ const FIXTURES_V2 = joinpath(@__DIR__, "fixtures", "v2_python")
         @testset "dimension names" begin
             path = joinpath(FIXTURES_V3, "array_dimnames.zarr")
             z = zopen(path)
-            @test dimnames(z) == ("x", "y")
+            @test dimnames(z) == ("y", "x")
         end
 
         @testset "NaN fill value" begin

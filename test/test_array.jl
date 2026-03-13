@@ -118,6 +118,12 @@ using Zarrs
                 dimension_names=("x", "y", "z"))
             @test dimnames(z4) == ("x", "y", "z")
 
+            # 1D dimension names
+            path_1d = joinpath(dir, "dimnames1d.zarr")
+            z_1d = zcreate(Float32, 10; chunks=(5,), path=path_1d,
+                dimension_names=("time",))
+            @test dimnames(z_1d) == ("time",)
+
             # zzeros path
             path4 = joinpath(dir, "dimnames_zzeros.zarr")
             z5 = zzeros(Float64, 8, 8; chunks=(4, 4), path=path4,
