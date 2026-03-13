@@ -7,9 +7,7 @@ makedocs(;
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://earth-mover.github.io/Zarrs.jl",
-        assets=["assets/logo.svg"],
     ),
-    logo="assets/logo.svg",
     pages=[
         "Home" => "index.md",
         "Getting Started" => "getting_started.md",
