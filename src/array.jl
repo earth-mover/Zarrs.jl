@@ -262,6 +262,25 @@ function zinfo(z::ZarrsArray)
 end
 
 # ---------------------------------------------------------------------------
+# Dimension names
+# ---------------------------------------------------------------------------
+
+"""
+    dimnames(z::ZarrsArray{T,N}) -> Union{Nothing, NTuple{N, Union{String, Nothing}}}
+
+Return the dimension names of the array, or `nothing` if unset.
+Names are returned in Julia column-major order (reversed from Zarr C-order).
+"""
+function dimnames(z::ZarrsArray{T,N}) where {T,N}
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr)
+    metadata = JSON.parse(metadata_str)
+    raw = get(metadata, "dimension_names", nothing)
+    raw === nothing && return nothing
+    reversed = reverse(raw)
+    return ntuple(i -> reversed[i] === nothing ? nothing : String(reversed[i]), N)
+end
+
+# ---------------------------------------------------------------------------
 # Attributes
 # ---------------------------------------------------------------------------
 

@@ -106,12 +106,7 @@ const FIXTURES_V2 = joinpath(@__DIR__, "fixtures", "v2_python")
         @testset "dimension names" begin
             path = joinpath(FIXTURES_V3, "array_dimnames.zarr")
             z = zopen(path)
-            meta_str = Zarrs.LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr)
-            meta = Zarrs.JSON.parse(meta_str)
-            dim_names = get(meta, "dimension_names", nothing)
-            @test dim_names !== nothing
-            @test "x" in dim_names
-            @test "y" in dim_names
+            @test dimnames(z) == ("x", "y")
         end
 
         @testset "NaN fill value" begin
