@@ -75,12 +75,7 @@ const REF_F64_3D = Float64.(reshape(0:59, 3, 4, 5))
 
         @testset "dimension names" begin
             z = zopen(joinpath(ZARRS_JL_FIXTURES, "array_dimnames.zarr"))
-            meta_str = Zarrs.LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr)
-            meta = Zarrs.JSON.parse(meta_str)
-            dim_names = get(meta, "dimension_names", nothing)
-            @test dim_names !== nothing
-            @test "x" in dim_names
-            @test "y" in dim_names
+            @test dimnames(z) == ("x", "y")
         end
     end
 end

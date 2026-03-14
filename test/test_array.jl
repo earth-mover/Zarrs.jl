@@ -95,6 +95,43 @@ using Zarrs
         end
     end
 
+    @testset "dimension names" begin
+        mktempdir() do dir
+            # Create with names, read back immediately
+            path = joinpath(dir, "dimnames2d.zarr")
+            z = zcreate(Float64, 10, 20; chunks=(5, 10), path=path,
+                dimension_names=("x", "y"))
+            @test dimnames(z) == ("x", "y")
+
+            # Persistence: reopen
+            z2 = zopen(path)
+            @test dimnames(z2) == ("x", "y")
+
+            # No names specified
+            path2 = joinpath(dir, "nonames.zarr")
+            z3 = zcreate(Float64, 10, 20; chunks=(5, 10), path=path2)
+            @test dimnames(z3) === nothing
+
+            # 3D array ordering
+            path3 = joinpath(dir, "dimnames3d.zarr")
+            z4 = zcreate(Float32, 4, 5, 6; chunks=(2, 2, 2), path=path3,
+                dimension_names=("x", "y", "z"))
+            @test dimnames(z4) == ("x", "y", "z")
+
+            # 1D dimension names
+            path_1d = joinpath(dir, "dimnames1d.zarr")
+            z_1d = zcreate(Float32, 10; chunks=(5,), path=path_1d,
+                dimension_names=("time",))
+            @test dimnames(z_1d) == ("time",)
+
+            # zzeros path
+            path4 = joinpath(dir, "dimnames_zzeros.zarr")
+            z5 = zzeros(Float64, 8, 8; chunks=(4, 4), path=path4,
+                dimension_names=("lat", "lon"))
+            @test dimnames(z5) == ("lat", "lon")
+        end
+    end
+
     @testset "dimensionality: $(ndim)D" for ndim in 1:4
         mktempdir() do dir
             shape = ntuple(_ -> 64, ndim)
