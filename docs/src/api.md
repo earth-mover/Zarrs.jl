@@ -19,9 +19,10 @@ Base.keys(::ZarrsGroup)
 Base.getindex(::ZarrsGroup, ::AbstractString)
 ```
 
-## Attributes
+## Metadata
 
 ```@docs
+dimnames
 get_attributes
 set_attributes!
 ```
