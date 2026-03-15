@@ -4,7 +4,7 @@ Julia bindings for the [zarrs](https://github.com/zarrs/zarrs) Rust library, pro
 
 ## Motivation
 
-Zarr.jl implements the Zarr specification in pure Julia. While functional, it has incomplete V3 support (sharding not wired in, limited codec coverage) and re-implements the full codec pipeline in Julia. Zarrs.jl takes a different approach: delegate the codec pipeline and storage I/O to the battle-tested zarrs Rust library via its C FFI ([zarrs_ffi](https://github.com/zarrs/zarrs_ffi)), giving Julia users access to the full zarrs feature set — including sharding, all registered codecs, and conformance-tested V3 support — with minimal Julia-side complexity.
+Zarr.jl implements the Zarr specification in pure Julia. While functional, it has incomplete V3 support (sharding not wired in, limited codec coverage) and re-implements the full codec pipeline in Julia. Zarrs.jl takes a different approach: delegate the codec pipeline and storage I/O to the battle-tested zarrs Rust library via a custom C FFI (`zarrs_jl`), giving Julia users access to the full zarrs feature set — including sharding, all registered codecs, and conformance-tested V3 support — with minimal Julia-side complexity.
 
 This mirrors the approach taken by [zarr-matlab](https://github.com/zarrs/zarr-matlab) and [zarrs-python](https://github.com/zarrs/zarrs-python), which wrap zarrs for their respective ecosystems.
 
@@ -16,7 +16,7 @@ This mirrors the approach taken by [zarr-matlab](https://github.com/zarrs/zarr-m
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| FFI approach | Wrap zarrs_ffi directly | Stable versioned C API, shared maintenance with C/C++ users. Thin companion crate for missing features. |
+| FFI approach | Custom C FFI over zarrs | Direct dependency on zarrs crate with C FFI exports in `zarrs_jl`. Full control over exposed API surface. |
 | Zarr version | Full V2 + V3 | zarrs supports both; users need V2 read/write for legacy data. V3 is the primary creation target. |
 | Package name | **Zarrs.jl** | Matches the Rust crate. Short, distinct from Zarr.jl. `using Zarrs`. |
 | Zarr.jl relationship | Independent package | Own API, no dependency on Zarr.jl. Compatible function names for easy migration. |
@@ -49,14 +49,14 @@ This mirrors the approach taken by [zarr-matlab](https://github.com/zarrs/zarr-m
                    │  C ABI (@ccall)
 ┌──────────────────▼──────────────────────────────┐
 │  libzarrs_jl.{so,dylib,dll}                     │
-│  (Rust cdylib: re-exports zarrs_ffi + additions) │
+│  (Rust cdylib: C FFI over zarrs crate)           │
 │  zarrs codec pipeline, storage, metadata         │
 └──────────────────────────────────────────────────┘
 ```
 
 **Three layers:**
 
-1. **libzarrs_jl** — A thin Rust crate (`zarrs_jl`) that depends on `zarrs_ffi` (v0.10) and re-exports its full API, plus adds functions zarrs_ffi doesn't yet provide: array resize, storage listing, HTTP storage. Compiled as a single `cdylib`.
+1. **libzarrs_jl** — A Rust crate (`zarrs_jl`) that depends on `zarrs` directly and exposes a C FFI for storage, array, and group operations. Includes additional functions for array resize, storage listing, HTTP storage (via `SimpleHttpStore`), consolidated metadata access, and Icechunk integration. Compiled as a single `cdylib`.
 
 2. **LibZarrs module** — Thin Julia `@ccall` wrappers. Handles pointer management, error checking, string conversion. Not part of the public API.
 
@@ -73,7 +73,8 @@ Zarrs.jl/
 │   ├── Zarrs.jl                   # Module entry, exports
 │   ├── LibZarrs.jl                # Low-level @ccall bindings
 │   ├── types.jl                   # Julia ↔ zarrs type mapping
-│   ├── storage.jl                 # ZarrsStore (filesystem, HTTP)
+│   ├── storage.jl                 # Storage handles, consolidated metadata, URL dispatch
+│   ├── url_pipeline.jl            # URL pipeline parser (scheme://bucket/prefix|adapter:)
 │   ├── array.jl                   # ZarrsArray <: AbstractDiskArray
 │   ├── group.jl                   # ZarrsGroup, hierarchy
 │   ├── icechunk.jl                # Zarrs.Icechunk submodule
@@ -83,11 +84,9 @@ Zarrs.jl/
 │   └── zarrs_jl/                  # Companion Rust crate
 │       ├── Cargo.toml
 │       └── src/
-│           ├── lib.rs
-│           ├── resize.rs
-│           ├── storage.rs
-│           ├── icechunk.rs
-│           └── erase.rs
+│           ├── lib.rs             # FFI exports: storage, array, group, resize, erase, listing
+│           ├── http_store.rs      # SimpleHttpStore (CDN-compatible HTTP ObjectStore)
+│           └── icechunk.rs        # Icechunk integration
 ├── docs/                          # Documenter.jl documentation
 ├── examples/                      # Runnable example scripts
 └── test/
@@ -100,6 +99,8 @@ Zarrs.jl/
     ├── test_diskarray.jl          # DiskArrays interface: chunking, broadcast, reduce
     ├── test_memory.jl             # Handle lifecycle, GC, concurrent access
     ├── test_http.jl               # HTTP/HTTPS remote reads
+    ├── test_consolidated.jl       # Consolidated metadata (V2 + V3)
+    ├── test_url_pipeline.jl       # URL pipeline parsing and dispatch
     ├── test_icechunk.jl           # Icechunk storage, sessions, branches, tags
     ├── test_compat_zarr_python.jl # Bidirectional with zarr-python
     ├── test_compat_zarrs.jl       # Bidirectional with zarrs CLI tools
@@ -112,74 +113,16 @@ Zarrs.jl/
 
 ## Companion Rust Crate: zarrs_jl
 
-The companion crate (`deps/zarrs_jl/`) links against zarrs_ffi as a dependency and adds the small number of functions zarrs_ffi doesn't expose. As zarrs_ffi grows, functions migrate upstream and the companion crate shrinks.
+The companion crate (`deps/zarrs_jl/`) depends on `zarrs` directly (not `zarrs_ffi`) and provides a complete C FFI for Julia. All FFI functions are defined in `lib.rs`.
 
-### zarrs_ffi API (v0.10.0)
-
-```
-Storage:
-  zarrsCreateStorageFilesystem(path, &storage)
-  zarrsDestroyStorage(storage)
-
-Array lifecycle:
-  zarrsCreateArrayRW(storage, path, metadataJson, &array)
-  zarrsOpenArrayRW(storage, path, &array)
-  zarrsDestroyArray(array)
-
-Array metadata:
-  zarrsArrayGetDimensionality(array, &ndim)
-  zarrsArrayGetShape(array, ndim, *shape)
-  zarrsArrayGetDataType(array, &dtype)
-  zarrsArrayGetMetadataString(array, pretty, &json)
-  zarrsArrayGetAttributes(array, pretty, &json)
-  zarrsArraySetAttributes(array, json)
-  zarrsArrayStoreMetadata(array)
-
-Array data I/O (arbitrary region — not just chunks):
-  zarrsArrayGetSubsetSize(array, ndim, *shape, &size)
-  zarrsArrayRetrieveSubset(array, ndim, *start, *shape, bufLen, *buf)
-  zarrsArrayStoreSubset(array, ndim, *start, *shape, bufLen, *buf)
-
-Chunk-level I/O:
-  zarrsArrayRetrieveChunk(array, ndim, *indices, bufLen, *buf)
-  zarrsArrayStoreChunk(array, ndim, *indices, bufLen, *buf)
-  zarrsArrayGetChunkGridShape(array, ndim, *gridShape)
-  zarrsArrayGetChunkSize(array, ndim, *indices, &size)
-  zarrsArrayGetChunkOrigin(array, ndim, *indices, *origin)
-  zarrsArrayGetChunkShape(array, ndim, *indices, *shape)
-  zarrsArrayGetChunksInSubset(array, ndim, *start, *shape, *chunksStart, *chunksShape)
-
-Sharded arrays:
-  zarrsArrayGetSubChunkShape(array, ndim, &isSharded, *shape)
-  zarrsArrayGetSubChunkGridShape(array, ndim, *gridShape)
-  zarrsCreateShardIndexCache(array, &cache)
-  zarrsDestroyShardIndexCache(cache)
-  zarrsArrayRetrieveSubChunk(array, cache, ndim, *indices, bufLen, *buf)
-  zarrsArrayRetrieveSubsetSharded(array, cache, ndim, *start, *shape, bufLen, *buf)
-
-Groups:
-  zarrsCreateGroupRW(storage, path, metadataJson, &group)
-  zarrsOpenGroupRW(storage, path, &group)
-  zarrsDestroyGroup(group)
-  zarrsGroupGetAttributes(group, pretty, &json)
-  zarrsGroupSetAttributes(group, json)
-  zarrsGroupStoreMetadata(group)
-
-Errors:
-  zarrsLastError() → *char
-  zarrsFreeString(*char)
-
-Version:
-  zarrsVersionMajor/Minor/Patch/Version()
-```
-
-### Companion Crate Additions
+### Exported FFI Functions
 
 | Feature | Function | Description |
 |---------|----------|-------------|
 | Array resize | `zarrsJlArrayResize(array, ndim, *newShape)` | `array.set_shape()` + `store_metadata()` |
 | Storage listing | `zarrsJlStorageListDir(storage, path, &json)` | Returns JSON array of child keys |
-| HTTP storage | `zarrsJlCreateStorageHTTP(url, &storage)` | Wraps `zarrs_http::HTTPStore` |
+| HTTP storage | `zarrsJlCreateStorageHTTP(url, &storage)` | Custom `SimpleHttpStore` (CDN-compatible) |
+| Storage get | `zarrsJlStorageGet(storage, key, &data)` | Read a single key from storage (for consolidated metadata) |
 | Erase chunk | `zarrsJlArrayEraseChunk(array, ndim, *indices)` | Remove a single chunk |
 | Icechunk | `zarrsIcechunk*` functions | Repository, session, branch/tag management |
 
@@ -187,16 +130,11 @@ Version:
 
 ```toml
 [features]
-default = ["filesystem", "http", "icechunk"]
-filesystem = []
-http = ["zarrs_http"]
+default = ["icechunk"]
 icechunk = ["dep:icechunk"]
-object_store = ["zarrs_object_store", "dep:object_store"]
-s3 = ["object_store", "object_store/aws"]
-gcs = ["object_store", "object_store/gcp"]
-azure = ["object_store", "object_store/azure"]
-all_backends = ["http", "s3", "gcs", "azure", "icechunk"]
 ```
+
+The crate unconditionally includes filesystem, HTTP, S3, and GCS support via `zarrs`, `zarrs_object_store`, and `object_store` dependencies. Only Icechunk is feature-gated.
 
 ---
 
@@ -393,28 +331,34 @@ Default: Rayon auto-detects available cores. This coexists with Julia's thread p
 
 | Backend | Source | Read/Write | Status |
 |---------|--------|------------|--------|
-| Filesystem | zarrs_ffi (built-in) | R/W | Implemented |
-| HTTP/HTTPS | zarrs_http | Read-only | Implemented |
+| Filesystem | zarrs (built-in) | R/W | Implemented |
+| HTTP/HTTPS | Custom `SimpleHttpStore` | Read-only | Implemented |
+| Direct S3 | zarrs_object_store + object_store | R/W | Implemented |
+| Direct GCS | zarrs_object_store + object_store | R/W | Implemented |
 | Icechunk (S3/GCS/Azure/Local/Memory) | icechunk crate | R/W | Implemented |
-| Direct S3 | zarrs_object_store | R/W | Future |
-| Direct GCS | zarrs_object_store | R/W | Future |
 | Direct Azure | zarrs_object_store | R/W | Future |
 
 ### HTTP (Read-Only)
 
-The [`zarrs_http`](https://github.com/zarrs/zarrs_http) crate provides `HTTPStore`. The companion crate wraps it:
+The companion crate provides a custom `SimpleHttpStore` (`deps/zarrs_jl/src/http_store.rs`) instead of using `zarrs_http::HTTPStore`. This custom implementation tolerates servers (e.g. Cloudflare CDN) that omit the `Content-Length` header from responses — a common issue when serving Zarr stores over HTTP.
+
+Key design choices:
+- Implements the `object_store::ObjectStore` trait so it plugs into the same `zarrs_object_store` → `AsyncToSyncStorageAdapter` pipeline as S3/GCS
+- For HEAD requests, uses `Range: bytes=0-0` and parses `Content-Range` to discover total size (works around missing `Content-Length`)
+- Reads full response body to determine size when headers are incomplete
+- Read-only: write operations return `NotImplemented`
 
 ```rust
-// zarrs_jl/src/storage.rs
-#[no_mangle]
-pub extern "C" fn zarrsJlCreateStorageHTTP(
+// zarrs_jl/src/lib.rs
+pub unsafe extern "C" fn zarrsCreateStorageHTTP(
     url: *const c_char,
-    storage: *mut ZarrsStorage,
+    pStorage: *mut *mut StorageHandle,
 ) -> ZarrsResult {
-    let url = unsafe { CStr::from_ptr(url) }.to_str()?;
-    let store = Arc::new(zarrs_http::HTTPStore::new(url)?);
-    *storage = ZarrsStorage::new_readable(store);
-    ZARRS_SUCCESS
+    // ...
+    let http_store = http_store::SimpleHttpStore::new(url_str)?;
+    let async_store = Arc::new(zarrs_object_store::AsyncObjectStore::new(http_store));
+    let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(async_store, TokioBlockOn(runtime)));
+    // ...
 }
 ```
 
@@ -442,29 +386,33 @@ Remote storage introduces network latency. The design handles this without Julia
 
 ### Storage Dispatch
 
-The Julia `zopen` function detects the URL scheme and routes to the appropriate storage constructor:
+The `create_storage` function uses the [URL pipeline](https://github.com/jbms/url-pipeline) syntax to parse the path and route to the appropriate storage backend. Stages are separated by `|` (e.g. `"s3://bucket/repo|icechunk://branch.main/"`).
 
 ```julia
-function create_storage(path::String; storage_options=Dict{String,String}())
-    if startswith(path, "http://") || startswith(path, "https://")
-        return LibZarrs.zarrs_jl_create_storage_http(path)
-    elseif startswith(path, "s3://")
-        return LibZarrs.zarrs_jl_create_storage_s3(path, JSON.json(storage_options))
-    elseif startswith(path, "gs://")
-        return LibZarrs.zarrs_jl_create_storage_gcs(path, JSON.json(storage_options))
-    elseif startswith(path, "az://")
-        return LibZarrs.zarrs_jl_create_storage_azure(path, JSON.json(storage_options))
+function _create_direct_storage(pipeline::URLPipeline; anonymous, region, endpoint_url)
+    root = pipeline.root
+    if root.scheme === :file
+        ptr = LibZarrs.zarrs_create_storage_filesystem(root.prefix)
+    elseif root.scheme === :s3
+        ptr = LibZarrs.zarrs_create_storage_s3(root.bucket, root.prefix, region, endpoint_url, anon)
+    elseif root.scheme === :gs
+        ptr = LibZarrs.zarrs_create_storage_gcs(root.bucket, root.prefix, anon)
+    elseif root.scheme === :http || root.scheme === :https
+        ptr = LibZarrs.zarrs_create_storage_http(root.prefix)
     else
-        return LibZarrs.zarrs_create_storage_filesystem(path)
+        error("Unsupported root scheme: $(root.scheme)")
     end
+    return ZarrsStorageHandle(ptr)
 end
 ```
+
+For Icechunk pipelines, the root scheme provides the backing store (S3/GCS/local/memory) and the `icechunk:` adapter adds versioned access.
 
 ---
 
 ## Data Type Mapping
 
-| Zarr data_type | zarrs_ffi enum | Julia type |
+| Zarr data_type | zarrs FFI enum | Julia type |
 |---------------|---------------|------------|
 | `bool` | `ZARRS_BOOL` | `Bool` |
 | `int8` | `ZARRS_INT8` | `Int8` |
@@ -616,6 +564,8 @@ end
 | `test_diskarray.jl` | DiskArrays interface: chunking, broadcast, reduce |
 | `test_memory.jl` | Handle lifecycle, GC, concurrent access |
 | `test_http.jl` | HTTP/HTTPS remote reads |
+| `test_consolidated.jl` | Consolidated metadata (V2 `.zmetadata`, V3 inline) |
+| `test_url_pipeline.jl` | URL pipeline parsing and dispatch |
 | `test_icechunk.jl` | Icechunk storage, sessions, branches, tags, commits |
 | `test_compat_zarr_python.jl` | Bidirectional with zarr-python |
 | `test_compat_zarrs.jl` | Bidirectional with zarrs CLI tools |
@@ -661,15 +611,32 @@ The package was built in four phases:
 
 ---
 
+## Consolidated Metadata
+
+Consolidated metadata is fully implemented for both V2 and V3:
+
+- **V2**: Reads `.zmetadata` files containing pre-consolidated group/array metadata
+- **V3**: Reads `zarr.json` with inline `consolidated_metadata` field
+
+The `ZarrsStorageHandle` caches consolidated metadata on first access via `_try_load_consolidated!()`. Group listing operations (`keys()`) use consolidated metadata when available, avoiding expensive per-key storage requests over HTTP/S3.
+
+The `zarrsJlStorageGet` FFI function enables this by reading arbitrary keys from storage:
+
+```rust
+pub unsafe extern "C" fn zarrsJlStorageGet(
+    storage: *mut StorageHandle,
+    key: *const c_char,
+    data_out: *mut *mut c_char,
+) -> ZarrsResult { ... }
+```
+
+---
+
 ## Future Work
 
-### Direct S3/GCS/Azure Access (non-Icechunk)
+### Direct Azure Access (non-Icechunk)
 
-Support reading plain Zarr stores on cloud storage (not Icechunk repositories) via `zarrs_object_store` + Apache `object_store`. Lower priority since Icechunk covers most cloud use cases.
-
-### Consolidated Metadata
-
-Support reading `.zmetadata` (Zarr V2 consolidated metadata) for faster group enumeration over HTTP/S3 where list operations are expensive. Pure Julia-side optimization; no Rust changes needed.
+Support reading plain Zarr stores on Azure Blob Storage via `zarrs_object_store` + Apache `object_store`. S3 and GCS are already implemented. Azure is available via Icechunk but not yet as a direct backend.
 
 ### Fill Value Edge Cases
 
