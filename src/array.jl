@@ -47,7 +47,8 @@ function DiskArrays.readblock!(z::ZarrsArray{T,N}, aout, i::AbstractUnitRange...
     starts, shapes = zarrs_subset(ranges)
     nbytes = prod(shapes) * sizeof(T)
     buf = Vector{UInt8}(undef, nbytes)
-    LibZarrs.zarrs_array_retrieve_subset(z.handle.ptr, starts, shapes, buf)
+    ndim = Csize_t(length(starts))
+    LibZarrs.zarrs_array_retrieve_subset(z.handle.ptr, ndim, starts, shapes, Csize_t(length(buf)), buf)
     data = reshape(reinterpret(T, buf), size(aout))
     copyto!(aout, data)
     return aout
@@ -57,7 +58,9 @@ function DiskArrays.writeblock!(z::ZarrsArray{T,N}, ain, i::AbstractUnitRange...
     ranges = NTuple{N,UnitRange{Int}}(UnitRange{Int}.(i))
     starts, shapes = zarrs_subset(ranges)
     buf = reinterpret(UInt8, vec(collect(T, ain)))
-    LibZarrs.zarrs_array_store_subset(z.handle.ptr, starts, shapes, Vector{UInt8}(buf))
+    ndim = Csize_t(length(starts))
+    buf_u8 = Vector{UInt8}(buf)
+    LibZarrs.zarrs_array_store_subset(z.handle.ptr, ndim, starts, shapes, Csize_t(length(buf_u8)), buf_u8)
     return ain
 end
 
@@ -112,8 +115,9 @@ function _open_array(storage::ZarrsStorageHandle, array_path::AbstractString, st
     array_ptr = LibZarrs.zarrs_open_array_rw(storage.ptr, array_path)
     handle = ZarrsArrayHandle(array_ptr, storage)
 
-    ndim = LibZarrs.zarrs_array_get_dimensionality(array_ptr)
-    c_shape = LibZarrs.zarrs_array_get_shape(array_ptr, ndim)
+    ndim = Int(LibZarrs.zarrs_array_get_dimensionality(array_ptr))
+    c_shape = Vector{UInt64}(undef, ndim)
+    LibZarrs.zarrs_array_get_shape(array_ptr, Csize_t(ndim), c_shape)
     dtype_enum = LibZarrs.zarrs_array_get_data_type(array_ptr)
 
     T = ZARRS_DTYPE_TO_JULIA[dtype_enum]
@@ -121,7 +125,7 @@ function _open_array(storage::ZarrsStorageHandle, array_path::AbstractString, st
     N = ndim
 
     # Get chunk shape from metadata
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(array_ptr)
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(array_ptr, Cint(1))
     metadata = JSON.parse(metadata_str)
     c_chunks = _extract_chunk_shape(metadata)
     jl_chunks = Tuple(reverse(c_chunks))
@@ -242,7 +246,8 @@ Resize the array to new dimensions. Existing data within the new bounds is prese
 function Base.resize!(z::ZarrsArray{T,N}, dims::Int...) where {T,N}
     length(dims) == N || throw(DimensionMismatch("expected $N dimensions, got $(length(dims))"))
     c_shape = UInt64.(reverse(dims))
-    LibZarrs.zarrs_jl_array_resize(z.storage.ptr, "/", collect(c_shape))
+    new_shape = collect(c_shape)
+    LibZarrs.zarrs_jl_array_resize(z.storage.ptr, "/", Csize_t(length(new_shape)), new_shape)
     z.shape[] = NTuple{N,Int}(dims)
     return z
 end
@@ -257,7 +262,7 @@ end
 Print detailed metadata information about the array.
 """
 function zinfo(z::ZarrsArray)
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr)
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, Cint(1))
     println(metadata_str)
 end
 
@@ -272,7 +277,7 @@ Return the dimension names of the array, or `nothing` if unset.
 Names are returned in Julia column-major order (reversed from Zarr C-order).
 """
 function dimnames(z::ZarrsArray{T,N}) where {T,N}
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr)
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, Cint(1))
     metadata = JSON.parse(metadata_str)
     raw = get(metadata, "dimension_names", nothing)
     raw === nothing && return nothing
@@ -291,7 +296,7 @@ end
 Return the array's user attributes as a dictionary.
 """
 function get_attributes(z::ZarrsArray)
-    json_str = LibZarrs.zarrs_array_get_attributes(z.handle.ptr)
+    json_str = LibZarrs.zarrs_array_get_attributes(z.handle.ptr, Cint(1))
     return JSON.parse(json_str)
 end
 

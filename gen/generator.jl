@@ -288,7 +288,7 @@ build!(ctx, BUILDSTAGE_PRINTING_ONLY)
 # Post-process: wrap output in the API module
 # ---------------------------------------------------------------------------
 
-output_path = joinpath(output_dir, "libzarrs_api.jl")
+output_path = joinpath(output_dir, "LibZarrs.jl")
 
 raw_content = read(output_path, String)
 
@@ -300,7 +300,7 @@ wrapped = """
 #   julia --project -e 'using Pkg; Pkg.instantiate()'
 #   julia --project generator.jl
 
-module API
+module LibZarrs
 
 # Library path — must be a plain String for ccall((:sym, lib), ...) to work.
 # Initialized in __init__() and accessed by all generated ccall wrappers.
@@ -360,7 +360,7 @@ end
 
 $raw_content
 
-end # module API
+end # module LibZarrs
 """
 
 write(output_path, wrapped)

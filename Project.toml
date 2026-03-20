@@ -5,6 +5,9 @@ authors = ["Joe Hamman <joe@joehamman.com>"]
 description = "High-performance Zarr V2 and V3 arrays for Julia, powered by the zarrs Rust library"
 license = "MIT OR Apache-2.0"
 
+[workspace]
+projects = ["test", "docs"]
+
 [deps]
 DiskArrays = "3c3547ce-8d99-4f5e-a174-61eb10b00ae3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
