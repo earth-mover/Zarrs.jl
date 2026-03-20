@@ -1,0 +1,4 @@
+# Auto-generated files — collapse in GitHub diffs and exclude from language stats
+src/LibZarrs.jl linguist-generated=true
+deps/zarrs_jl/zarrs_jl.h linguist-generated=true
+deps/zarrs_jl/Cargo.lock linguist-generated=true
