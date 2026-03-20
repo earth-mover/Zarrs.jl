@@ -1,0 +1,38 @@
+language = "C"
+style = "type"
+include_guard = "ZARRS_JL_H"
+no_includes = true
+sys_includes = ["stdarg.h", "stdbool.h", "stddef.h", "stdint.h", "stdlib.h"]
+
+# Inject opaque handle type forward declarations.
+# cbindgen cannot translate these structs (they contain Rust trait objects),
+# so we declare them manually as opaque types.
+after_includes = """
+
+/**
+ * Opaque handle types — allocated and managed by libzarrs_jl.
+ * Callers interact with these only via pointers.
+ */
+typedef struct StorageHandle StorageHandle;
+typedef struct ArrayHandle ArrayHandle;
+typedef struct GroupHandle GroupHandle;
+typedef struct IcStorageHandle IcStorageHandle;
+typedef struct IcRepoHandle IcRepoHandle;
+typedef struct IcSessionHandle IcSessionHandle;
+"""
+
+[enum]
+# Use "typedef enum { ... } Name;" style to avoid the separate
+# "enum Name { ... }; typedef int32_t Name;" pattern that confuses Clang.jl.
+rename_variants = "None"
+
+[parse]
+parse_deps = false
+
+[export]
+# Exclude handle structs — they are forward-declared in after_includes above
+exclude = ["StorageHandle", "ArrayHandle", "GroupHandle", "IcStorageHandle", "IcRepoHandle", "IcSessionHandle"]
+
+# Map Cargo features to C preprocessor defines
+[defines]
+"feature = icechunk" = "ZARRS_ICECHUNK"

@@ -121,7 +121,7 @@ function _open_group(storage::ZarrsStorageHandle, group_path::AbstractString, st
     group_ptr = LibZarrs.zarrs_open_group_rw(storage.ptr, group_path)
     handle = ZarrsGroupHandle(group_ptr, storage)
 
-    attrs_json = LibZarrs.zarrs_group_get_attributes(group_ptr)
+    attrs_json = LibZarrs.zarrs_group_get_attributes(group_ptr, Cint(1))
     attrs = JSON.parse(attrs_json)
     if !(attrs isa Dict)
         attrs = Dict{String,Any}()
@@ -140,7 +140,7 @@ end
 Return the group's user attributes as a dictionary.
 """
 function get_attributes(g::ZarrsGroup)
-    json_str = LibZarrs.zarrs_group_get_attributes(g.handle.ptr)
+    json_str = LibZarrs.zarrs_group_get_attributes(g.handle.ptr, Cint(1))
     return JSON.parse(json_str)
 end
 

@@ -1,0 +1,24 @@
+[general]
+library_name = "libzarrs_jl"
+output_file_path = "../src/LibZarrs.jl"
+print_using_CEnum = false
+use_deterministic_symbol = true
+smart_de_anonymize = true
+extract_c_comment_style = "doxygen"
+show_c_function_prototype = true
+
+# ZarrsResult has both an enum and a typedef int32_t in the header (cbindgen pattern
+# for #[repr(i32)] Rust enums). Clang.jl's sanity check rejects this duplicate.
+# We exclude both and define ZarrsResult manually in the prologue.
+output_ignorelist = ["ZarrsResult"]
+
+[codegen]
+use_julia_bool = true
+always_NUL_terminated_string = true
+opaque_func_arg_as_PtrCvoid = true
+opaque_as_mutable_struct = false
+
+[codegen.macro]
+macro_mode = "basic"
+ignore_header_guards = true
+ignore_pure_definition = true

@@ -73,7 +73,8 @@ pub extern "C" fn zarrsVersion() -> *mut c_char {
 
 type StorageArc = Arc<dyn ReadableWritableListableStorageTraits>;
 
-pub(crate) struct StorageHandle {
+/// Opaque handle wrapping storage (filesystem, S3, GCS, HTTP, etc.).
+pub struct StorageHandle {
     pub(crate) store: StorageArc,
 }
 
@@ -329,7 +330,8 @@ pub unsafe extern "C" fn zarrsDestroyStorage(storage: *mut StorageHandle) -> Zar
 // Array — opaque handle wrapping Array<dyn ReadableWritableStorageTraits>
 // ---------------------------------------------------------------------------
 
-struct ArrayHandle {
+/// Opaque handle wrapping a zarrs Array.
+pub struct ArrayHandle {
     array: Array<dyn ReadableWritableListableStorageTraits>,
 }
 
@@ -894,7 +896,8 @@ pub unsafe extern "C" fn zarrsArrayGetSubChunkShape(
 // Groups
 // ---------------------------------------------------------------------------
 
-struct GroupHandle {
+/// Opaque handle wrapping a zarrs Group.
+pub struct GroupHandle {
     group: Group<dyn ReadableWritableListableStorageTraits>,
 }
 
