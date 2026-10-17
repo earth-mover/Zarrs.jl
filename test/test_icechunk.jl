@@ -163,6 +163,19 @@ end
             @test ndims(lat) >= 2
             val = lat[1, 1]
             @test val isa Number
+
+            # Icechunk spec v2 repository (issue #13)
+            s3 = S3Storage(
+                bucket    = "dynamical-ecmwf-ifs-ens",
+                prefix    = "ecmwf-ifs-ens-forecast-15-day-0-25-degree/v0.1.0.icechunk",
+                region    = "us-west-2",
+                anonymous = true,
+            )
+            repo = Repository(s3)
+            session = readonly_session(repo; branch="main")
+            g = zopen(session)
+            @test "temperature_2m" in keys(g)
+            @test g["latitude"][1] == 90.0
         end
     end
 

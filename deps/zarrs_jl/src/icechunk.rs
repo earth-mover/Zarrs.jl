@@ -94,15 +94,12 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
         }
     };
 
-    let s3_opts = icechunk::config::S3Options {
-        region: region_opt,
-        endpoint_url: endpoint_opt,
-        anonymous: anonymous != 0,
-        allow_http: allow_http != 0,
-        force_path_style: false,
-        network_stream_timeout_seconds: Some(30),
-        requester_pays: false,
-    };
+    let mut s3_opts = icechunk::config::S3Options::default();
+    s3_opts.region = region_opt;
+    s3_opts.endpoint_url = endpoint_opt;
+    s3_opts.anonymous = anonymous != 0;
+    s3_opts.allow_http = allow_http != 0;
+    s3_opts.network_stream_timeout_seconds = Some(30);
 
     let credentials = if anonymous != 0 {
         Some(icechunk::config::S3Credentials::Anonymous)
@@ -119,7 +116,7 @@ pub unsafe extern "C" fn zarrsIcechunkS3Storage(
         Some(icechunk::config::S3Credentials::FromEnv)
     };
 
-    match icechunk::new_s3_storage(s3_opts, bucket_str, prefix_opt, credentials) {
+    match icechunk::new_s3_storage(s3_opts, bucket_str, prefix_opt, credentials, vec![], vec![], None) {
         Ok(storage) => {
             let handle = Box::new(IcStorageHandle { storage, runtime });
             unsafe { *pHandle = Box::into_raw(handle) };
@@ -203,8 +200,7 @@ pub unsafe extern "C" fn zarrsIcechunkGcsStorage(
     };
 
     let result = runtime.block_on(async {
-        icechunk::storage::new_gcs_storage(bucket_str, prefix_opt, credentials, None)
-            .await
+        icechunk::storage::new_gcs_storage(bucket_str, prefix_opt, credentials, None, vec![], vec![])
             .map_err(|e| format!("GCS storage error: {e}"))
     });
 
@@ -414,7 +410,8 @@ pub unsafe extern "C" fn zarrsIcechunkRepoOpen(
     let runtime = ic.runtime.clone();
 
     let result = runtime.block_on(async {
-        icechunk::Repository::open(None, storage, std::collections::HashMap::new())
+        icechunk::Repository::open(storage)
+            .execute()
             .await
             .map_err(|e| format!("Repository open error: {e}"))
     });
@@ -446,7 +443,8 @@ pub unsafe extern "C" fn zarrsIcechunkRepoCreate(
     let runtime = ic.runtime.clone();
 
     let result = runtime.block_on(async {
-        icechunk::Repository::create(None, storage, std::collections::HashMap::new())
+        icechunk::Repository::create(storage)
+            .execute()
             .await
             .map_err(|e| format!("Repository create error: {e}"))
     });
@@ -478,7 +476,8 @@ pub unsafe extern "C" fn zarrsIcechunkRepoOpenOrCreate(
     let runtime = ic.runtime.clone();
 
     let result = runtime.block_on(async {
-        icechunk::Repository::open_or_create(None, storage, std::collections::HashMap::new())
+        icechunk::Repository::open_or_create(storage)
+            .execute()
             .await
             .map_err(|e| format!("Repository open_or_create error: {e}"))
     });
@@ -1035,7 +1034,8 @@ pub unsafe extern "C" fn zarrsIcechunkSessionCommit(
         let mut session_guard: tokio::sync::RwLockWriteGuard<'_, icechunk::session::Session> =
             sh.session.write().await;
         session_guard
-            .commit(&msg_str, None)
+            .commit(msg_str.as_str())
+            .execute()
             .await
             .map_err(|e| format!("commit error: {e}"))
     });
