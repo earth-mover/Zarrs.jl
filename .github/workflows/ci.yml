@@ -158,3 +158,33 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
         run: julia --project=docs docs/make.jl
+
+  bindings:
+    name: Generated bindings up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          # Pinned (with gen/Manifest.toml) so regenerating is reproducible:
+          # Clang.jl's libclang comes from the Julia version's libLLVM_jll.
+          version: "1.13"
+
+      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --version "$(cat gen/cbindgen-version)" --locked
+
+      - name: Regenerate zarrs_jl.h and LibZarrs.jl
+        run: |
+          julia --project=gen -e 'using Pkg; Pkg.instantiate()'
+          julia --project=gen gen/generator.jl
+
+      - name: Check for differences
+        run: |
+          if ! git diff --exit-code -- deps/zarrs_jl/zarrs_jl.h src/LibZarrs.jl; then
+            echo "::error::Generated bindings are out of date. Run gen/generator.jl and commit the result (see docs/src/internals.md)."
+            exit 1
+          fi

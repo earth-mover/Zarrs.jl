@@ -427,7 +427,7 @@ end
 Check if a session has uncommitted changes.
 """
 function has_uncommitted_changes(session::Session)
-    return LibZarrs.zarrs_icechunk_session_has_changes(session.handle.ptr)
+    return Bool(LibZarrs.zarrs_icechunk_session_has_changes(session.handle.ptr))
 end
 
 function Base.show(io::IO, s::Session)

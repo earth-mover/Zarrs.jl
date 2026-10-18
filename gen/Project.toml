@@ -1,0 +1,10 @@
+[deps]
+Clang = "40e3b903-d033-50b4-a0cc-940c62c95e31"
+JuliaFormatter = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
+MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
+
+# Pinned exactly so regenerating is deterministic (CI checks for drift).
+[compat]
+Clang = "=0.19.3"
+JuliaFormatter = "=2.14.0"
+MacroTools = "=0.5.16"
