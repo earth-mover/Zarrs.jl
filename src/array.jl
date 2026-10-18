@@ -125,7 +125,7 @@ function _open_array(storage::ZarrsStorageHandle, array_path::AbstractString, st
     N = ndim
 
     # Get chunk shape from metadata
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(array_ptr, Cint(1))
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(array_ptr, LibZarrs.JSON_COMPACT)
     metadata = JSON.parse(metadata_str)
     c_chunks = _extract_chunk_shape(metadata)
     jl_chunks = Tuple(reverse(c_chunks))
@@ -262,7 +262,7 @@ end
 Print detailed metadata information about the array.
 """
 function zinfo(z::ZarrsArray)
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, Cint(1))
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, LibZarrs.JSON_PRETTY)
     println(metadata_str)
 end
 
@@ -277,7 +277,7 @@ Return the dimension names of the array, or `nothing` if unset.
 Names are returned in Julia column-major order (reversed from Zarr C-order).
 """
 function dimnames(z::ZarrsArray{T,N}) where {T,N}
-    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, Cint(1))
+    metadata_str = LibZarrs.zarrs_array_get_metadata_string(z.handle.ptr, LibZarrs.JSON_COMPACT)
     metadata = JSON.parse(metadata_str)
     raw = get(metadata, "dimension_names", nothing)
     raw === nothing && return nothing
@@ -296,7 +296,7 @@ end
 Return the array's user attributes as a dictionary.
 """
 function get_attributes(z::ZarrsArray)
-    json_str = LibZarrs.zarrs_array_get_attributes(z.handle.ptr, Cint(1))
+    json_str = LibZarrs.zarrs_array_get_attributes(z.handle.ptr, LibZarrs.JSON_COMPACT)
     return JSON.parse(json_str)
 end
 

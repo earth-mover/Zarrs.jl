@@ -1,5 +1,6 @@
 [general]
 library_name = "libzarrs_jl"
+# output_file_path is set by generator.jl (resolved relative to the script)
 output_file_path = "../src/LibZarrs.jl"
 print_using_CEnum = false
 use_deterministic_symbol = true

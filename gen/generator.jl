@@ -13,10 +13,14 @@ rewriting transforms each raw ccall wrapper into an ergonomic Julia function:
   - Utility functions (zarrsLastError, zarrsFreeString, zarrsVersion) get
     thin wrappers without error checking
 
+This script regenerates both deps/zarrs_jl/zarrs_jl.h (via the cbindgen CLI)
+and src/LibZarrs.jl. Run it after changing any `extern "C"` function in
+deps/zarrs_jl/src/ and commit both files; CI fails if they are out of date.
+
 Usage:
-    cd gen/
-    julia --project -e 'using Pkg; Pkg.instantiate()'
-    julia --project generator.jl
+    cargo install cbindgen --version "$(cat gen/cbindgen-version)" --locked
+    julia --project=gen -e 'using Pkg; Pkg.instantiate()'
+    julia --project=gen gen/generator.jl
 =#
 
 using Clang
@@ -25,13 +29,31 @@ using MacroTools
 using JuliaFormatter
 
 const output_dir = joinpath(@__DIR__, "..", "src")
-const header_path = joinpath(@__DIR__, "..", "deps", "zarrs_jl", "zarrs_jl.h")
+const crate_dir = joinpath(@__DIR__, "..", "deps", "zarrs_jl")
+const header_path = joinpath(crate_dir, "zarrs_jl.h")
 
-if !isfile(header_path)
-    error("""
-    Header file not found: $header_path
-    Run `cargo build --release` in deps/zarrs_jl/ first to generate zarrs_jl.h via cbindgen.
-    """)
+# ---------------------------------------------------------------------------
+# Generate the C header with a pinned cbindgen so the output is reproducible
+# ---------------------------------------------------------------------------
+
+const cbindgen_version = strip(read(joinpath(@__DIR__, "cbindgen-version"), String))
+
+let
+    found = try
+        readchomp(`cbindgen --version`)
+    catch
+        error("""
+        cbindgen not found. Install the pinned version with:
+            cargo install cbindgen --version $cbindgen_version --locked
+        """)
+    end
+    if found != "cbindgen $cbindgen_version"
+        error("""
+        Found `$found`, but gen/cbindgen-version pins $cbindgen_version. Install it with:
+            cargo install cbindgen --version $cbindgen_version --locked
+        """)
+    end
+    run(Cmd(`cbindgen --config cbindgen.toml --output zarrs_jl.h`; dir=crate_dir))
 end
 
 # ---------------------------------------------------------------------------
@@ -243,38 +265,48 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Preprocess header: strip the "typedef int32_t ZarrsResult;" line that
-# cbindgen emits alongside "enum ZarrsResult { ... }".  Clang.jl's sanity
-# check rejects the duplicate name.  We write a cleaned copy to a temp file
-# and point Clang.jl at that instead of the original header.
+# Preprocess header: cbindgen emits `enum ZarrsResult { ... }` alongside
+# `typedef int32_t ZarrsResult;` (for the #[repr(i32)] Rust enum), and
+# Clang.jl's sanity check rejects the duplicate name. Cut the enum block out
+# and keep only the int32_t typedef; the variants are read from the block and
+# emitted as a Julia @enum in the module prologue below. We write the cleaned
+# copy to a temp file and point Clang.jl at that instead of the original header.
 # ---------------------------------------------------------------------------
 
-cleaned_header = let
-    lines = readlines(header_path)
-    out = String[]
-    for (i, line) in enumerate(lines)
-        # Convert "enum ZarrsResult {" to "typedef enum ZarrsResult {"
-        if startswith(line, "enum ZarrsResult {")
-            push!(out, "typedef " * line)
-        # Convert the closing "};" of the enum to "} ZarrsResult;"
-        # (it follows a line containing ZARRS_ERROR_)
-        elseif line == "};" && i > 1 && contains(lines[i-1], "ZARRS_ERROR_")
-            push!(out, "} ZarrsResult;")
-        # Drop the redundant "typedef int32_t ZarrsResult;"
-        elseif startswith(strip(line), "typedef") && contains(line, "int32_t") && contains(line, "ZarrsResult")
-            # skip
-        else
-            push!(out, line)
-        end
+header_text = read(header_path, String)
+
+# Matches the whole block, including the C23 `: int32_t` guard newer cbindgen
+# versions put between the name and the opening brace.
+const enum_block_re = r"^enum ZarrsResult\b[^{]*\{(?<body>[^}]*)\};\n"m
+
+result_variants = let
+    m = match(enum_block_re, header_text)
+    m === nothing && error("Could not find `enum ZarrsResult { ... };` in $header_path")
+    variants = Pair{String,Int}[]
+    for line in split(m[:body], '\n')
+        vm = match(r"^\s*(\w+)\s*=\s*(-?\d+)\s*,?\s*$", line)
+        vm === nothing || push!(variants, vm[1] => parse(Int, vm[2]))
     end
+    ("ZARRS_SUCCESS" => 0) in variants ||
+        error("ZarrsResult variants parsed from header lack ZARRS_SUCCESS = 0: $variants")
+    variants
+end
+
+cleaned_header = let
     tmp = joinpath(tempdir(), "zarrs_jl_cleaned.h")
-    write(tmp, join(out, "\n") * "\n")
+    write(tmp, replace(header_text, enum_block_re => ""))
     tmp
 end
 
+result_enum_body = join(("    $name = $value" for (name, value) in result_variants), "\n")
+
 options = load_options(joinpath(@__DIR__, "generator.toml"))
+# Resolve the output path relative to this script so it can be run from any directory
+options["general"]["output_file_path"] = joinpath(output_dir, "LibZarrs.jl")
 
 args = get_default_args()
+# Parse as C11 so the header's C23-only `typedef enum ZarrsResult` branch stays inactive
+push!(args, "-std=c11")
 # Define ZARRS_ICECHUNK so Clang sees the Icechunk-guarded functions
 push!(args, "-DZARRS_ICECHUNK")
 
@@ -292,13 +324,18 @@ output_path = joinpath(output_dir, "LibZarrs.jl")
 
 raw_content = read(output_path, String)
 
+# Clang.jl turns type names in C doc comments into Documenter `@ref` links, but
+# the opaque handle types are plain `Cvoid` aliases with no docstring to link
+# to, so the docs build would fail. Keep them as code spans instead.
+raw_content = replace(raw_content, r"\[(`[^`\]]+`)\]\(@ref\)" => s"\1")
+
 wrapped = """
 # This file is automatically generated by gen/generator.jl — DO NOT EDIT.
 #
-# To regenerate:
-#   cd gen/
-#   julia --project -e 'using Pkg; Pkg.instantiate()'
-#   julia --project generator.jl
+# To regenerate (also regenerates deps/zarrs_jl/zarrs_jl.h):
+#   cargo install cbindgen --version "\$(cat gen/cbindgen-version)" --locked
+#   julia --project=gen -e 'using Pkg; Pkg.instantiate()'
+#   julia --project=gen gen/generator.jl
 
 module LibZarrs
 
@@ -317,28 +354,18 @@ function __init__()
 end
 
 # ---------------------------------------------------------------------------
-# ZarrsResult enum — defined manually because cbindgen emits both
-# `enum ZarrsResult { ... }` and `typedef int32_t ZarrsResult` which
-# Clang.jl rejects as a duplicate name.
+# ZarrsResult enum — variants read from `enum ZarrsResult` in zarrs_jl.h.
+# Emitted here rather than by Clang.jl because cbindgen also declares
+# `typedef int32_t ZarrsResult`, which Clang.jl rejects as a duplicate name.
 # ---------------------------------------------------------------------------
 
 @enum ZarrsResult::Cint begin
-    ZARRS_SUCCESS = 0
-    ZARRS_ERROR_NULL_PTR = -1
-    ZARRS_ERROR_STORAGE = -2
-    ZARRS_ERROR_ARRAY = -3
-    ZARRS_ERROR_BUFFER_LENGTH = -4
-    ZARRS_ERROR_INVALID_INDICES = -5
-    ZARRS_ERROR_NODE_PATH = -6
-    ZARRS_ERROR_STORE_PREFIX = -7
-    ZARRS_ERROR_INVALID_METADATA = -8
-    ZARRS_ERROR_STORAGE_CAPABILITY = -9
-    ZARRS_ERROR_UNKNOWN_CHUNK_GRID_SHAPE = -10
-    ZARRS_ERROR_UNKNOWN_INTERSECTING_CHUNKS = -11
-    ZARRS_ERROR_UNSUPPORTED_DATA_TYPE = -12
-    ZARRS_ERROR_GROUP = -13
-    ZARRS_ERROR_INCOMPATIBLE_DIMENSIONALITY = -14
+$result_enum_body
 end
+
+# Values for the `pretty` argument of the JSON metadata/attribute getters
+const JSON_COMPACT = Cint(0)
+const JSON_PRETTY = Cint(1)
 
 # ---------------------------------------------------------------------------
 # Error handling

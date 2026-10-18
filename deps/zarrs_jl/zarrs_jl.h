@@ -19,7 +19,11 @@ typedef struct IcRepoHandle IcRepoHandle;
 typedef struct IcSessionHandle IcSessionHandle;
 
 
-enum ZarrsResult {
+enum ZarrsResult
+#if __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
   ZARRS_SUCCESS = 0,
   ZARRS_ERROR_NULL_PTR = -1,
   ZARRS_ERROR_STORAGE = -2,
@@ -36,7 +40,11 @@ enum ZarrsResult {
   ZARRS_ERROR_GROUP = -13,
   ZARRS_ERROR_INCOMPATIBLE_DIMENSIONALITY = -14,
 };
+#if __STDC_VERSION__ >= 202311L
+typedef enum ZarrsResult ZarrsResult;
+#else
 typedef int32_t ZarrsResult;
+#endif // __STDC_VERSION__ >= 202311L
 
 char *zarrsLastError(void);
 
