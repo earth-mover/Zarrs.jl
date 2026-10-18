@@ -154,23 +154,33 @@ function rewriter(x::Expr)
                 return s
             end) |> prettify
         else
-            # zarrsFreeString → pass through
+            # zarrsFreeString → pass through. Restrict the argument to C pointers:
+            # ccall would otherwise accept a Julia String and free Julia-owned memory.
             cc = :(ccall($fname, $rettype, $argtypes, $(argvalues...)))
-            return :(function $jl_name($(fargs...))
+            typed_fargs = [:($a::Union{Cstring,Ptr{UInt8}}) for a in fargs]
+            return :(function $jl_name($(typed_fargs...))
                 $cc
             end) |> prettify
         end
     end
 
     # --- Standard functions returning ZarrsResult ---
+    rettype == :ZarrsResult || error(
+        "$c_sym returns $rettype, not ZarrsResult. Add it to NO_ERROR_CHECK " *
+        "with a suitable wrapper, or return ZarrsResult from the Rust side.")
+
     atypes = argtypes.args
     avals = argvalues
     n = length(atypes)
     last_type = n > 0 ? atypes[end] : nothing
 
-    is_string_out = _is_string_out(last_type)
-    is_handle_out = !is_string_out && _is_handle_out(last_type)
-    is_scalar_out = !is_string_out && !is_handle_out && _is_scalar_out(last_type)
+    # Clang.jl drops `const`, so check the C prototype: a const trailing pointer
+    # is an input and must not be turned into an auto-managed output.
+    last_is_const = get(TRAILING_PARAM_IS_CONST, c_sym, false)
+
+    is_string_out = !last_is_const && _is_string_out(last_type)
+    is_handle_out = !last_is_const && !is_string_out && _is_handle_out(last_type)
+    is_scalar_out = !last_is_const && !is_string_out && !is_handle_out && _is_scalar_out(last_type)
 
     if is_string_out
         # char** output → allocate Ref{Cstring}, extract string, free
@@ -292,10 +302,22 @@ result_variants = let
     variants
 end
 
+# C function name → whether its last parameter is declared const.
+# Prototypes can span several lines; parameters contain no `(`, `)` or `;`.
+const TRAILING_PARAM_IS_CONST = Dict{Symbol,Bool}(
+    Symbol(m[1]) => startswith(strip(last(split(m[2], ','))), "const")
+    for m in eachmatch(r"\b(\w+)\(([^();]*)\);", header_text)
+)
+
 cleaned_header = let
-    tmp = joinpath(tempdir(), "zarrs_jl_cleaned.h")
-    write(tmp, replace(header_text, enum_block_re => ""))
-    tmp
+    (tmp, io) = mktemp(; cleanup=true)
+    write(io, replace(header_text, enum_block_re => ""))
+    close(io)
+    # Clang needs a .h extension to parse the file as a C header
+    hdr = tmp * ".h"
+    mv(tmp, hdr)
+    atexit(() -> rm(hdr; force=true))
+    hdr
 end
 
 result_enum_body = join(("    $name = $value" for (name, value) in result_variants), "\n")

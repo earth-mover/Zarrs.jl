@@ -4,6 +4,8 @@ deps/zarrs_jl/target/
 *.so
 *.dll
 Manifest.toml
+# Committed so binding generation is reproducible (see gen/generator.jl)
+!gen/Manifest.toml
 
 # Generated test fixtures
 test/fixtures/v3_python/

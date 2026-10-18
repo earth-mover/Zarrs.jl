@@ -102,14 +102,14 @@ function zarrs_last_error()
 end
 
 """
-    zarrs_free_string(s)
+    zarrs_free_string(s::Union{Cstring, Ptr{UInt8}})
 
 ### Prototype
 ```c
 void zarrsFreeString(char *s);
 ```
 """
-function zarrs_free_string(s)
+function zarrs_free_string(s::Union{Cstring,Ptr{UInt8}})
     ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), s)
 end
 
