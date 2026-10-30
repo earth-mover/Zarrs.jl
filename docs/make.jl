@@ -14,6 +14,7 @@ makedocs(;
         "Cloud & Remote Access" => "cloud.md",
         "Icechunk" => "icechunk.md",
         "API Reference" => "api.md",
+        "Icechunk parity" => "parity.md",
         "Low-level C API" => "internals.md",
     ],
 )

@@ -42,6 +42,21 @@ end
 DiskArrays.haschunks(::ZarrsArray) = DiskArrays.Chunked()
 DiskArrays.eachchunk(z::ZarrsArray) = DiskArrays.GridChunks(z, z.chunks)
 
+# Strings are variable-length: exchanged with the library as JSON arrays (C order).
+function DiskArrays.readblock!(z::ZarrsArray{String,N}, aout, i::AbstractUnitRange...) where {N}
+    starts, shapes = zarrs_subset(NTuple{N,UnitRange{Int}}(UnitRange{Int}.(i)))
+    json = LibZarrs.zarrs_jl_array_retrieve_strings(z.handle.ptr, Csize_t(length(starts)), starts, shapes)
+    copyto!(aout, reshape(String.(JSON.parse(json)), size(aout)))
+    return aout
+end
+
+function DiskArrays.writeblock!(z::ZarrsArray{String,N}, ain, i::AbstractUnitRange...) where {N}
+    starts, shapes = zarrs_subset(NTuple{N,UnitRange{Int}}(UnitRange{Int}.(i)))
+    LibZarrs.zarrs_jl_array_store_strings(z.handle.ptr, Csize_t(length(starts)), starts, shapes,
+                                          JSON.json(vec(collect(String, ain))))
+    return ain
+end
+
 function DiskArrays.readblock!(z::ZarrsArray{T,N}, aout, i::AbstractUnitRange...) where {T,N}
     ranges = NTuple{N,UnitRange{Int}}(UnitRange{Int}.(i))
     starts, shapes = zarrs_subset(ranges)
@@ -120,7 +135,13 @@ function _open_array(storage::ZarrsStorageHandle, array_path::AbstractString, st
     LibZarrs.zarrs_array_get_shape(array_ptr, Csize_t(ndim), c_shape)
     dtype_enum = LibZarrs.zarrs_array_get_data_type(array_ptr)
 
-    T = ZARRS_DTYPE_TO_JULIA[dtype_enum]
+    T = get(ZARRS_DTYPE_TO_JULIA, dtype_enum, nothing)
+    if T === nothing
+        meta = JSON.parse(LibZarrs.zarrs_array_get_metadata_string(array_ptr, LibZarrs.JSON_COMPACT))
+        dt = get(meta, "data_type", get(meta, "dtype", "?"))
+        throw(ArgumentError("unsupported Zarr data type $(JSON.json(dt)) at $array_path; Zarrs.jl " *
+                            "reads and writes bool, (u)int8-64, float16/32/64, complex64/128 and string"))
+    end
     jl_shape = julia_shape(c_shape)
     N = ndim
 

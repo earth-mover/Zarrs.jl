@@ -73,4 +73,44 @@ using Zarrs
             @test all(x -> x == -Inf, vals)
         end
     end
+
+    @testset "String (variable-length UTF-8)" begin
+        mktempdir() do dir
+            path = joinpath(dir, "s.zarr")
+            z = zcreate(String, 4, 3; chunks=(2, 2), path=path)
+            @test eltype(z) == String
+            @test all(==(""), z[:, :])            # default fill value
+            data = ["a" "bb" "ccc"; "" "ünïcødé" "x y"; "tab\t" "quote\"" "多字节"; "4" "55" "666"]
+            z[:, :] = data
+            @test z[:, :] == data
+            z[2, 2:3] = ["changed", "too"]
+            data[2, 2:3] = ["changed", "too"]
+            z2 = zopen(path)
+            @test eltype(z2) == String
+            @test z2[:, :] == data
+            @test z2[3, 3] == "多字节"
+            @test z2[2:3, 1:2] == data[2:3, 1:2]
+            meta = Zarrs.JSON.parse(read(joinpath(path, "zarr.json"), String))
+            @test meta["data_type"] == "string"
+            @test meta["codecs"][1]["name"] == "vlen-utf8"
+            @test !haskey(get(meta, "attributes", Dict()), "_zarrs")
+        end
+    end
+
+    @testset "Unsupported data types give a clear error" begin
+        mktempdir() do dir
+            path = joinpath(dir, "dt.zarr")
+            mkpath(path)
+            write(joinpath(path, "zarr.json"), Zarrs.JSON.json(Dict(
+                "zarr_format" => 3, "node_type" => "array", "shape" => [2],
+                "data_type" => Dict("name" => "numpy.datetime64",
+                                    "configuration" => Dict("unit" => "s", "scale_factor" => 1)),
+                "chunk_grid" => Dict("name" => "regular", "configuration" => Dict("chunk_shape" => [2])),
+                "chunk_key_encoding" => Dict("name" => "default"),
+                "fill_value" => 0, "codecs" => [Dict("name" => "bytes", "configuration" => Dict("endian" => "little"))])))
+            err = try zopen(path); nothing catch e; e end
+            @test err isa ArgumentError
+            @test occursin("numpy.datetime64", sprint(showerror, err))
+        end
+    end
 end

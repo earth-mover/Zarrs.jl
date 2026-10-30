@@ -77,8 +77,13 @@ function build_v3_metadata(;
 
     # Build codec pipeline: bytes → compression
     codecs = Any[]
-    push!(codecs, Dict("name" => "bytes",
-        "configuration" => Dict("endian" => "little")))
+    if T === String
+        # variable-length UTF-8, as written by zarr-python 3
+        push!(codecs, Dict("name" => "vlen-utf8", "configuration" => Dict()))
+    else
+        push!(codecs, Dict("name" => "bytes",
+            "configuration" => Dict("endian" => "little")))
+    end
     if compressor != "none"
         push!(codecs, build_compressor_dict(compressor, compressor_level))
     end
@@ -158,6 +163,7 @@ _default_fill_value(::Type{Bool}) = false
 _default_fill_value(::Type{T}) where {T<:Integer} = zero(T)
 _default_fill_value(::Type{T}) where {T<:AbstractFloat} = zero(T)
 _default_fill_value(::Type{Complex{T}}) where {T} = zero(Complex{T})
+_default_fill_value(::Type{String}) = ""
 _default_fill_value(::Type{T}) where {T} = zero(T)
 
 function _serialize_fill_value(v)

@@ -524,6 +524,7 @@ fn data_type_to_enum(dt: &zarrs::array::DataType) -> i32 {
         "float64" => 11,
         "complex64" => 12,
         "complex128" => 13,
+        "string" => 14,
         _ => -1,
     }
 }
@@ -713,6 +714,83 @@ pub unsafe extern "C" fn zarrsArrayStoreSubset(
         Ok(_) => ZarrsResult::ZARRS_SUCCESS,
         Err(e) => {
             set_error(e.to_string());
+            ZarrsResult::ZARRS_ERROR_ARRAY
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Variable-length strings (data type `string`), exchanged as JSON arrays in C order
+// ---------------------------------------------------------------------------
+
+fn subset_from(
+    dimensionality: usize,
+    p_start: *const u64,
+    p_shape: *const u64,
+) -> Result<zarrs::array::ArraySubset, String> {
+    let start = unsafe { slice::from_raw_parts(p_start, dimensionality) }.to_vec();
+    let shape = unsafe { slice::from_raw_parts(p_shape, dimensionality) }.to_vec();
+    zarrs::array::ArraySubset::new_with_start_shape(start, shape).map_err(|e| e.to_string())
+}
+
+/// Read a subset of a `string` array as a JSON array of strings (C order).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsJlArrayRetrieveStrings(
+    array: *mut ArrayHandle,
+    dimensionality: usize,
+    pSubsetStart: *const u64,
+    pSubsetShape: *const u64,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if array.is_null() || pSubsetStart.is_null() || pSubsetShape.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let result = subset_from(dimensionality, pSubsetStart, pSubsetShape).and_then(|subset| {
+        let values: Vec<String> = unsafe { &*array }
+            .array
+            .retrieve_array_subset_elements::<String>(&subset)
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&values).map_err(|e| e.to_string())
+    });
+    match result.and_then(|json| CString::new(json).map_err(|e| e.to_string())) {
+        Ok(cstr) => {
+            unsafe { *pJson = cstr.into_raw() };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_ARRAY
+        }
+    }
+}
+
+/// Write a subset of a `string` array from a JSON array of strings (C order).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsJlArrayStoreStrings(
+    array: *mut ArrayHandle,
+    dimensionality: usize,
+    pSubsetStart: *const u64,
+    pSubsetShape: *const u64,
+    json: *const c_char,
+) -> ZarrsResult {
+    if array.is_null() || pSubsetStart.is_null() || pSubsetShape.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let json_str = match str_from_ptr(json) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let result = subset_from(dimensionality, pSubsetStart, pSubsetShape).and_then(|subset| {
+        let values: Vec<String> = serde_json::from_str(json_str).map_err(|e| e.to_string())?;
+        unsafe { &*array }
+            .array
+            .store_array_subset_elements::<String>(&subset, &values)
+            .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(()) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
             ZarrsResult::ZARRS_ERROR_ARRAY
         }
     }

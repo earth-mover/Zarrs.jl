@@ -121,6 +121,24 @@ ZarrsResult zarrsArrayStoreSubset(ArrayHandle *array,
                                   uintptr_t subsetBytesCount,
                                   const uint8_t *pSubsetBytes);
 
+/**
+ * Read a subset of a `string` array as a JSON array of strings (C order).
+ */
+ZarrsResult zarrsJlArrayRetrieveStrings(ArrayHandle *array,
+                                        uintptr_t dimensionality,
+                                        const uint64_t *pSubsetStart,
+                                        const uint64_t *pSubsetShape,
+                                        char **pJson);
+
+/**
+ * Write a subset of a `string` array from a JSON array of strings (C order).
+ */
+ZarrsResult zarrsJlArrayStoreStrings(ArrayHandle *array,
+                                     uintptr_t dimensionality,
+                                     const uint64_t *pSubsetStart,
+                                     const uint64_t *pSubsetShape,
+                                     const char *json);
+
 ZarrsResult zarrsArrayGetChunkGridShape(ArrayHandle *array,
                                         uintptr_t dimensionality,
                                         uint64_t *pChunkGridShape);

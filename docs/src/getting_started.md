@@ -20,6 +20,19 @@ z[:, :] = rand(Float32, 1000, 1000)
 subset = z[1:100, 1:100]
 ```
 
+### Data types
+
+`Bool`, `Int8`-`Int64`, `UInt8`-`UInt64`, `Float16`/`Float32`/`Float64`, `ComplexF32`/`ComplexF64`
+and `String` (Zarr V3 `string`, variable-length UTF-8, as written by zarr-python 3):
+
+```julia
+names = zcreate(String, 100; chunks=(50,), path="names.zarr")
+names[1:2] = ["alpha", "beta"]
+```
+
+Other Zarr data types (for example `numpy.datetime64`) cannot be opened yet; `zopen` raises an
+`ArgumentError` naming the data type.
+
 ### Compressors
 
 Supported compressors: `"zstd"` (default), `"gzip"`, `"blosc"`, `"none"`.
