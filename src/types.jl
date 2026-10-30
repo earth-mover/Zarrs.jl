@@ -4,6 +4,7 @@ const ZARRS_DTYPE_TO_JULIA = Dict{Cint, DataType}(
     4  => Int64,      5  => UInt8,      6  => UInt16,     7  => UInt32,
     8  => UInt64,     9  => Float16,    10 => Float32,    11 => Float64,
     12 => ComplexF32, 13 => ComplexF64,
+    14 => String,
 )
 
 # Mapping from Julia types to Zarr V3 data type strings
@@ -16,6 +17,7 @@ const JULIA_TO_ZARR_DTYPE = Dict{DataType, String}(
     Float16    => "float16",    Float32 => "float32",
     Float64    => "float64",
     ComplexF32 => "complex64",  ComplexF64 => "complex128",
+    String     => "string",
 )
 
 # Mapping from Julia types to NumPy dtype strings (for V2 metadata)

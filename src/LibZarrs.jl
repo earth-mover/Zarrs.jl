@@ -661,6 +661,67 @@ function zarrs_array_store_subset(
 end
 
 """
+    zarrs_jl_array_retrieve_strings(array, dimensionality, pSubsetStart, pSubsetShape)
+
+Read a subset of a `string` array as a JSON array of strings (C order).
+
+### Prototype
+```c
+ZarrsResult zarrsJlArrayRetrieveStrings(ArrayHandle *array, uintptr_t dimensionality, const uint64_t *pSubsetStart, const uint64_t *pSubsetShape, char **pJson);
+```
+"""
+function zarrs_jl_array_retrieve_strings(array, dimensionality, pSubsetStart, pSubsetShape)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsJlArrayRetrieveStrings, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}, Ptr{Cstring}),
+        array,
+        dimensionality,
+        pSubsetStart,
+        pSubsetShape,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_jl_array_store_strings(array, dimensionality, pSubsetStart, pSubsetShape, json)
+
+Write a subset of a `string` array from a JSON array of strings (C order).
+
+### Prototype
+```c
+ZarrsResult zarrsJlArrayStoreStrings(ArrayHandle *array, uintptr_t dimensionality, const uint64_t *pSubsetStart, const uint64_t *pSubsetShape, const char *json);
+```
+"""
+function zarrs_jl_array_store_strings(
+    array,
+    dimensionality,
+    pSubsetStart,
+    pSubsetShape,
+    json,
+)
+    _result = @zarrs_ccall(
+        (:zarrsJlArrayStoreStrings, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}, Cstring),
+        array,
+        dimensionality,
+        pSubsetStart,
+        pSubsetShape,
+        json
+    )
+    check_error(_result)
+end
+
+"""
     zarrs_array_get_chunk_grid_shape(array, dimensionality, pChunkGridShape)
 
 ### Prototype

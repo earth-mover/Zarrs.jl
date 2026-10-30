@@ -18,6 +18,8 @@ using Zarrs.Icechunk
         @test size(a) == (6, 4)
         data = reshape(Float32.(1:24), 6, 4)
         a[:, :] = data
+        names = create_array(s, "names", String, 3; chunks=(2,))
+        names[:] = ["alpha", "", "γ"]
         b = create_array(s, "/flags", UInt8, 5; compressor="none")
         b[:] = UInt8[1, 2, 3, 4, 5]
         # raw metadata form
@@ -37,10 +39,11 @@ using Zarrs.Icechunk
         @test get_attributes(zopen(r, "nested/temp")) == Dict("units" => "K")
         @test dimnames(zopen(r, "nested/temp")) == ("x", "y")
         @test zopen(r, "flags")[:] == UInt8[1, 2, 3, 4, 5]
+        @test zopen(r, "names")[:] == ["alpha", "", "γ"]
         @test get_attributes(zopen(r, "/")) == Dict("title" => "demo")
         @test get_attributes(zopen(r, "nested")) == Dict("level" => 1)
         @test get_attributes(zopen(r, "raw")) == Dict("raw" => true)
-        @test sort(keys(zopen(r))) == ["flags", "nested", "raw"]
+        @test sort(keys(zopen(r))) == ["flags", "names", "nested", "raw"]
         @test_throws ErrorException create_group(r, "nope")   # read-only session
     end
 
