@@ -15,7 +15,7 @@ zarrs = { version = "0.23", features = ["filesystem"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 zarrs_object_store = { version = "0.6", features = ["http"] }
 object_store = { version = "0.13", features = ["http", "aws", "gcp"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 icechunk = { version = "2.3", optional = true }
 async-trait = "0.1"
 bytes = "1"
@@ -23,7 +23,9 @@ chrono = "0.4"
 futures = "0.3"
 once_cell = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+typetag = "0.2"
 url = "2"
 
 [profile.release]
