@@ -3,7 +3,8 @@ use std::ffi::c_char;
 use std::sync::Arc;
 
 use super::{
-    set_error, str_from_ptr, IcechunkAdapter, StorageHandle, TokioBlockOn, ZarrsResult,
+    set_error, shared_runtime, str_from_ptr, IcechunkAdapter, SharedRuntime, StorageHandle,
+    TokioBlockOn, ZarrsResult,
 };
 
 use zarrs_storage::storage_adapter::async_to_sync::AsyncToSyncStorageAdapter;
@@ -15,13 +16,13 @@ use zarrs_storage::storage_adapter::async_to_sync::AsyncToSyncStorageAdapter;
 /// Handle wrapping Icechunk object-store storage + a Tokio runtime.
 pub struct IcStorageHandle {
     pub storage: Arc<dyn icechunk::storage::Storage + Send + Sync>,
-    pub runtime: Arc<tokio::runtime::Runtime>,
+    pub runtime: SharedRuntime,
 }
 
 /// Handle wrapping an Icechunk Repository.
 pub struct IcRepoHandle {
     pub repo: icechunk::Repository,
-    pub runtime: Arc<tokio::runtime::Runtime>,
+    pub runtime: SharedRuntime,
 }
 
 /// Handle wrapping an Icechunk Session and its Store (zarr-compatible).
@@ -30,17 +31,16 @@ pub struct IcRepoHandle {
 pub struct IcSessionHandle {
     pub store: icechunk::Store,
     pub session: Arc<tokio::sync::RwLock<icechunk::session::Session>>,
-    pub runtime: Arc<tokio::runtime::Runtime>,
+    pub runtime: SharedRuntime,
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn make_runtime() -> Result<Arc<tokio::runtime::Runtime>, String> {
-    tokio::runtime::Runtime::new()
-        .map(Arc::new)
-        .map_err(|e| format!("Failed to create tokio runtime: {e}"))
+// Kept as a function so the storage constructors read as before; always the shared runtime.
+fn make_runtime() -> Result<SharedRuntime, String> {
+    Ok(shared_runtime())
 }
 
 fn opt_string(ptr: *const c_char) -> Option<String> {
@@ -499,7 +499,7 @@ pub unsafe extern "C" fn zarrsIcechunkRepoOpen(
 
     let ic = unsafe { &*ic_storage };
     let storage = ic.storage.clone();
-    let runtime = ic.runtime.clone();
+    let runtime = ic.runtime;
 
     let result = runtime.block_on(async {
         icechunk::Repository::open(storage)
@@ -532,7 +532,7 @@ pub unsafe extern "C" fn zarrsIcechunkRepoCreate(
 
     let ic = unsafe { &*ic_storage };
     let storage = ic.storage.clone();
-    let runtime = ic.runtime.clone();
+    let runtime = ic.runtime;
 
     let result = runtime.block_on(async {
         icechunk::Repository::create(storage)
@@ -565,7 +565,7 @@ pub unsafe extern "C" fn zarrsIcechunkRepoOpenOrCreate(
 
     let ic = unsafe { &*ic_storage };
     let storage = ic.storage.clone();
-    let runtime = ic.runtime.clone();
+    let runtime = ic.runtime;
 
     let result = runtime.block_on(async {
         icechunk::Repository::open_or_create(storage)
@@ -965,7 +965,7 @@ pub unsafe extern "C" fn zarrsIcechunkReadonlySession(
     };
 
     let rh = unsafe { &*repo };
-    let runtime = rh.runtime.clone();
+    let runtime = rh.runtime;
 
     let result = runtime.block_on(async {
         let session = rh
@@ -1010,7 +1010,7 @@ pub unsafe extern "C" fn zarrsIcechunkWritableSession(
     };
 
     let rh = unsafe { &*repo };
-    let runtime = rh.runtime.clone();
+    let runtime = rh.runtime;
 
     let result = runtime.block_on(async {
         let session = rh
@@ -1066,15 +1066,7 @@ pub unsafe extern "C" fn zarrsIcechunkSessionGetStorage(
 
     let sh = unsafe { &*session };
     let adapter = Arc::new(IcechunkAdapter::new(sh.store.clone()));
-    let runtime = tokio::runtime::Runtime::new();
-    let runtime = match runtime {
-        Ok(rt) => rt,
-        Err(e) => {
-            set_error(format!("Failed to create tokio runtime: {e}"));
-            return ZarrsResult::ZARRS_ERROR_STORAGE;
-        }
-    };
-    let block_on = TokioBlockOn(runtime);
+    let block_on = TokioBlockOn(shared_runtime());
     let sync_store = Arc::new(AsyncToSyncStorageAdapter::new(adapter, block_on));
 
     let handle = Box::new(StorageHandle { store: sync_store });
@@ -1172,4 +1164,101 @@ pub unsafe extern "C" fn zarrsIcechunkSessionHasChanges(
 
     unsafe { *pHasChanges = if has_changes { 1 } else { 0 } };
     ZarrsResult::ZARRS_SUCCESS
+}
+
+/// Commit a writable session with a message and snapshot metadata (`metadata_json`, a JSON
+/// object, or null for none), returning the snapshot ID string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionCommitWithMetadata(
+    session: *mut IcSessionHandle,
+    message: *const c_char,
+    metadata_json: *const c_char,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let msg_str = match str_from_ptr(message) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let properties: icechunk::format::snapshot::SnapshotProperties = match opt_string(metadata_json)
+    {
+        None => Default::default(),
+        Some(json) => match serde_json::from_str(&json) {
+            Ok(p) => p,
+            Err(e) => {
+                set_error(format!("commit metadata must be a JSON object: {e}"));
+                return ZarrsResult::ZARRS_ERROR_INVALID_METADATA;
+            }
+        },
+    };
+
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        let mut guard = sh.session.write().await;
+        guard
+            .commit(msg_str.as_str())
+            .properties(properties)
+            .execute()
+            .await
+            .map_err(|e| format!("commit error: {e}"))
+    });
+    match result.and_then(|id| CString::new(id.to_string()).map_err(|e| e.to_string())) {
+        Ok(cstr) => {
+            unsafe { *pSnapshotId = cstr.into_raw() };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// The ancestry of a branch, newest first, as a JSON array of
+/// `{"id", "parent_id", "written_at", "message", "metadata"}` (`written_at` is RFC 3339, UTC).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoAncestry(
+    repo: *mut IcRepoHandle,
+    branch: *const c_char,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let branch_str = match str_from_ptr(branch) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let rh = unsafe { &*repo };
+    let result = rh.runtime.block_on(async {
+        use futures::TryStreamExt;
+        let version = icechunk::repository::VersionInfo::BranchTipRef(branch_str);
+        let stream = rh.repo.ancestry(&version).await.map_err(|e| format!("ancestry error: {e}"))?;
+        let infos: Vec<_> = stream.try_collect().await.map_err(|e| format!("ancestry error: {e}"))?;
+        let items: Vec<serde_json::Value> = infos
+            .into_iter()
+            .map(|info| {
+                serde_json::json!({
+                    "id": info.id.to_string(),
+                    "parent_id": info.parent_id.map(|p| p.to_string()),
+                    "written_at": info.flushed_at.to_rfc3339(),
+                    "message": info.message,
+                    "metadata": info.metadata,
+                })
+            })
+            .collect();
+        serde_json::to_string(&items).map_err(|e| e.to_string())
+    });
+    match result.and_then(|json| CString::new(json).map_err(|e| e.to_string())) {
+        Ok(cstr) => {
+            unsafe { *pJson = cstr.into_raw() };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
 }
