@@ -9,17 +9,30 @@ using ..Zarrs: ZarrsStorageHandle, ZarrsArrayHandle, ZarrsGroupHandle,
 
 import ..Zarrs: zopen
 
+include("icechunk_credentials.jl")
+
 # ---------------------------------------------------------------------------
 # Storage configuration types
 # ---------------------------------------------------------------------------
 
 """
     S3Storage(; bucket, prefix="", region="", anonymous=false,
-              endpoint_url="", allow_http=false,
-              access_key_id="", secret_access_key="", session_token="")
+              endpoint_url="", allow_http=false, force_path_style=false,
+              access_key_id="", secret_access_key="", session_token="",
+              credentials=nothing)
 
 Configuration for an Icechunk repository stored on Amazon S3
 (or S3-compatible services like MinIO).
+
+Credentials, in order of precedence:
+- `credentials = RefreshableCredentials(f)`: `f()` returns an [`S3Credentials`](@ref) and is
+  called again before they expire (see [`RefreshableCredentials`](@ref));
+- `anonymous = true`: unsigned requests;
+- `access_key_id` / `secret_access_key` / `session_token`: static keys;
+- otherwise the AWS environment (variables, config files, instance metadata).
+
+`force_path_style = true` uses path-style addressing (needed by many S3-compatible services); it
+is honoured with `credentials` (the static-key constructor does not support it yet).
 """
 struct S3Storage
     bucket::String
@@ -31,6 +44,8 @@ struct S3Storage
     access_key_id::String
     secret_access_key::String
     session_token::String
+    force_path_style::Bool
+    credentials::Union{Nothing,RefreshableCredentials}
 end
 
 function S3Storage(; bucket::AbstractString,
@@ -39,12 +54,15 @@ function S3Storage(; bucket::AbstractString,
                      anonymous::Bool=false,
                      endpoint_url::AbstractString="",
                      allow_http::Bool=false,
+                     force_path_style::Bool=false,
                      access_key_id::AbstractString="",
                      secret_access_key::AbstractString="",
-                     session_token::AbstractString="")
+                     session_token::AbstractString="",
+                     credentials::Union{Nothing,RefreshableCredentials}=nothing)
     S3Storage(String(bucket), String(prefix), String(region),
               anonymous, String(endpoint_url), Bool(allow_http),
-              String(access_key_id), String(secret_access_key), String(session_token))
+              String(access_key_id), String(secret_access_key), String(session_token),
+              force_path_style, credentials)
 end
 
 """
@@ -58,18 +76,23 @@ Configuration for an Icechunk repository stored on Google Cloud Storage.
 - `:service_account_path` — path to service account JSON file (pass as `credential_value`)
 - `:service_account_key` — service account JSON string (pass as `credential_value`)
 - `:bearer_token` — bearer token string (pass as `credential_value`)
+
+Alternatively pass `credentials = RefreshableCredentials(f)`, where `f()` returns a
+[`GCSBearerToken`](@ref); it takes precedence over `credential_type`.
 """
 struct GCSStorage
     bucket::String
     prefix::String
     credential_type::Symbol
     credential_value::String
+    credentials::Union{Nothing,RefreshableCredentials}
 end
 
 function GCSStorage(; bucket::AbstractString, prefix::AbstractString="",
                       credential_type::Symbol=:from_env,
-                      credential_value::AbstractString="")
-    GCSStorage(String(bucket), String(prefix), credential_type, String(credential_value))
+                      credential_value::AbstractString="",
+                      credentials::Union{Nothing,RefreshableCredentials}=nothing)
+    GCSStorage(String(bucket), String(prefix), credential_type, String(credential_value), credentials)
 end
 
 """
@@ -126,13 +149,17 @@ const StorageConfig = Union{S3Storage, GCSStorage, AzureStorage, LocalStorage, M
 
 mutable struct StorageHandle
     ptr::Ptr{Cvoid}
-    function StorageHandle(ptr::Ptr{Cvoid})
-        h = new(ptr)
+    callback_id::UInt64  # registered RefreshableCredentials, or 0
+    function StorageHandle(ptr::Ptr{Cvoid}, callback_id::UInt64=UInt64(0))
+        h = new(ptr, callback_id)
         finalizer(h) do h
             if h.ptr != C_NULL
                 LibZarrs.zarrs_icechunk_destroy_storage(h.ptr)
                 h.ptr = C_NULL
             end
+            # Repositories and sessions keep the storage handle alive, so nothing can ask for
+            # these credentials any more.
+            h.callback_id != 0 && _unregister(h.callback_id, h)
         end
         return h
     end
@@ -190,6 +217,17 @@ function _azure_credential_type_int(sym::Symbol)
 end
 
 function _create_ic_storage(s::S3Storage)
+    if s.credentials !== nothing
+        id = _register(s.credentials, S3Credentials)
+        ptr = try
+            LibZarrs.zarrs_icechunk_s3_storage_refreshable(
+                s.bucket, s.prefix, s.region, s.endpoint_url, s.allow_http, s.force_path_style, id)
+        catch
+            _unregister(id, nothing)
+            rethrow()
+        end
+        return StorageHandle(ptr, id)
+    end
     ptr = LibZarrs.zarrs_icechunk_s3_storage(
         s.bucket, s.prefix, s.region, s.anonymous, s.endpoint_url, s.allow_http,
         s.access_key_id, s.secret_access_key, s.session_token)
@@ -197,6 +235,16 @@ function _create_ic_storage(s::S3Storage)
 end
 
 function _create_ic_storage(s::GCSStorage)
+    if s.credentials !== nothing
+        id = _register(s.credentials, GCSBearerToken)
+        ptr = try
+            LibZarrs.zarrs_icechunk_gcs_storage_refreshable(s.bucket, s.prefix, id)
+        catch
+            _unregister(id, nothing)
+            rethrow()
+        end
+        return StorageHandle(ptr, id)
+    end
     ptr = LibZarrs.zarrs_icechunk_gcs_storage(
         s.bucket, s.prefix,
         _gcs_credential_type_int(s.credential_type), s.credential_value)
@@ -462,6 +510,7 @@ end
 # ---------------------------------------------------------------------------
 
 export S3Storage, GCSStorage, AzureStorage, LocalStorage, MemoryStorage,
+       RefreshableCredentials, S3Credentials, GCSBearerToken, set_credentials_timeout,
        Repository, Session, StorageConfig,
        readonly_session, writable_session, list_branches, list_tags,
        commit, has_uncommitted_changes,

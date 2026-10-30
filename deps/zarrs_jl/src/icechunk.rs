@@ -217,6 +217,98 @@ pub unsafe extern "C" fn zarrsIcechunkGcsStorage(
     }
 }
 
+/// S3 storage whose credentials come from a Julia function (refreshed by icechunk before they
+/// expire). `callback_id` identifies the function in Zarrs.jl's credential registry; see
+/// `credentials.rs` for how the function is called without running Julia on Tokio threads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkS3StorageRefreshable(
+    bucket: *const c_char,
+    prefix: *const c_char,
+    region: *const c_char,
+    endpoint_url: *const c_char,
+    allow_http: i32,
+    force_path_style: i32,
+    callback_id: u64,
+    pHandle: *mut *mut IcStorageHandle,
+) -> ZarrsResult {
+    if pHandle.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let bucket_str = match str_from_ptr(bucket) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let runtime = match make_runtime() {
+        Ok(rt) => rt,
+        Err(msg) => {
+            set_error(msg);
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+    let mut s3_opts = icechunk::config::S3Options::default();
+    s3_opts.region = opt_string(region);
+    s3_opts.endpoint_url = opt_string(endpoint_url);
+    s3_opts.allow_http = allow_http != 0;
+    s3_opts.force_path_style = force_path_style != 0;
+    s3_opts.network_stream_timeout_seconds = Some(30);
+    let fetcher = crate::credentials::JuliaS3CredentialsFetcher { callback_id, pid: std::process::id() };
+    let credentials = Some(icechunk::config::S3Credentials::Refreshable(Arc::new(fetcher)));
+    match icechunk::new_s3_storage(s3_opts, bucket_str, opt_string(prefix), credentials, vec![], vec![], None) {
+        Ok(storage) => {
+            let handle = Box::new(IcStorageHandle { storage, runtime });
+            unsafe { *pHandle = Box::into_raw(handle) };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(e) => {
+            set_error(format!("S3 storage error: {e}"));
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// GCS storage whose bearer token comes from a Julia function (see
+/// `zarrsIcechunkS3StorageRefreshable`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkGcsStorageRefreshable(
+    bucket: *const c_char,
+    prefix: *const c_char,
+    callback_id: u64,
+    pHandle: *mut *mut IcStorageHandle,
+) -> ZarrsResult {
+    if pHandle.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let bucket_str = match str_from_ptr(bucket) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let prefix_opt = opt_string(prefix);
+    let runtime = match make_runtime() {
+        Ok(rt) => rt,
+        Err(msg) => {
+            set_error(msg);
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+    let fetcher = crate::credentials::JuliaGcsCredentialsFetcher { callback_id, pid: std::process::id() };
+    let credentials = Some(icechunk::config::GcsCredentials::Refreshable(Arc::new(fetcher)));
+    let result = runtime.block_on(async {
+        icechunk::storage::new_gcs_storage(bucket_str, prefix_opt, credentials, None, vec![], vec![])
+            .map_err(|e| format!("GCS storage error: {e}"))
+    });
+    match result {
+        Ok(storage) => {
+            let handle = Box::new(IcStorageHandle { storage, runtime });
+            unsafe { *pHandle = Box::into_raw(handle) };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn zarrsIcechunkAzureStorage(
     account: *const c_char,

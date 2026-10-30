@@ -70,6 +70,94 @@ function check_error(result::ZarrsResult)
 end
 
 # ---------------------------------------------------------------------------
+# Off-thread calls (refreshable credentials)
+#
+# Icechunk asks for refreshable credentials on Tokio threads, and Zarrs.jl answers them with an
+# ordinary Julia task (see `Zarrs.Icechunk.RefreshableCredentials`). That task can only run if the
+# Julia thread that made the FFI call is not blocked inside it. So once refreshable credentials
+# exist, every call that may block on I/O runs on a libuv worker thread while the calling task
+# yields. The worker thread is adopted by Julia to run the call wrapper, so the C call itself runs
+# in a GC-safe region: otherwise a garbage collection started by the credentials task would wait
+# forever for that worker. Before refreshable credentials exist, calls are plain `ccall`s.
+# ---------------------------------------------------------------------------
+
+"Set (never cleared) when refreshable credentials are first registered."
+const OFFLOAD_BLOCKING_CALLS = Threads.Atomic{Bool}(false)
+
+# At most UV_THREADPOOL_SIZE - 2 concurrent off-thread calls, so that libuv worker threads stay
+# free for DNS lookups and file I/O, which the credentials task may need.
+const OFFLOAD_LIMIT =
+    Base.Semaphore(max(1, parse(Int, get(ENV, "UV_THREADPOOL_SIZE", "4")) - 2))
+
+"""
+    @gcsafe_threadcall((cfunc, clib), rettype, (argtypes...), argvals...)
+
+Like `Base.@threadcall`, but the C function runs in a GC-safe region (`@ccall gc_safe=true`), and
+concurrency is limited by `OFFLOAD_LIMIT`. The C function must not call back into Julia.
+"""
+macro gcsafe_threadcall(f, rettype, argtypes, argvals...)
+    isa(argtypes, Expr) && argtypes.head === :tuple ||
+        error("argument types must be a tuple")
+    length(argtypes.args) == length(argvals) ||
+        error("wrong number of arguments to C function")
+    f = esc(f)
+    rettype = esc(rettype)
+    argtypes = map(esc, argtypes.args)
+    argvals = map(esc, argvals)
+    wrapper = :(function (fptr::Ptr{Cvoid}, args_ptr::Ptr{Cvoid}, retval_ptr::Ptr{Cvoid})
+        p = args_ptr
+    end)
+    body = wrapper.args[2].args
+    typed = Expr[]
+    for (i, T) in enumerate(argtypes)
+        arg = Symbol("arg", i)
+        push!(body, :($arg = unsafe_load(convert(Ptr{$T}, p))))
+        push!(body, :(p += Core.sizeof($T)))
+        push!(typed, :($arg::$T))
+    end
+    call = Expr(:(::), Expr(:call, Expr(:$, :fptr), typed...), rettype)
+    push!(body, :(ret = @ccall gc_safe = true $call))
+    push!(body, :(unsafe_store!(convert(Ptr{$rettype}, retval_ptr), ret)))
+    push!(body, :(return Int(Core.sizeof($rettype))))
+    wrapper = Expr(:var"hygienic-scope", wrapper, @__MODULE__, __source__)
+    return :(
+        let fun_ptr = @cfunction($wrapper, Int, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}))
+            Base.acquire(OFFLOAD_LIMIT) do
+                Base.do_threadcall(
+                    fun_ptr,
+                    cglobal($f),
+                    $rettype,
+                    Any[$(argtypes...)],
+                    Any[$(argvals...)],
+                )
+            end
+        end
+    )
+end
+
+"""
+    @zarrs_ccall((cfunc, clib), rettype, (argtypes...), argvals...)
+
+A `ccall` that runs off-thread (`@gcsafe_threadcall`) once `OFFLOAD_BLOCKING_CALLS` is set.
+On Julia < 1.12 (no `@ccall gc_safe`), always a plain `ccall`; refreshable credentials then
+refuse to start (see `Zarrs.Icechunk.RefreshableCredentials`).
+"""
+macro zarrs_ccall(f, rettype, argtypes, argvals...)
+    plain = Expr(:call, :ccall, f, rettype, argtypes, argvals...)
+    VERSION < v"1.12-" && return esc(plain)
+    offloaded = Expr(
+        :macrocall,
+        Symbol("@gcsafe_threadcall"),
+        __source__,
+        f,
+        rettype,
+        argtypes,
+        argvals...,
+    )
+    return esc(:(OFFLOAD_BLOCKING_CALLS[] ? $offloaded : $plain))
+end
+
+# ---------------------------------------------------------------------------
 # Generated bindings
 # ---------------------------------------------------------------------------
 
@@ -139,12 +227,12 @@ ZarrsResult zarrsCreateStorageFilesystem(const char *path, StorageHandle **pStor
 """
 function zarrs_create_storage_filesystem(path)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateStorageFilesystem, libzarrs_jl),
         ZarrsResult,
         (Cstring, Ptr{Ptr{StorageHandle}}),
         path,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -160,12 +248,12 @@ ZarrsResult zarrsCreateStorageHTTP(const char *url, StorageHandle **pStorage);
 """
 function zarrs_create_storage_http(url)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateStorageHTTP, libzarrs_jl),
         ZarrsResult,
         (Cstring, Ptr{Ptr{StorageHandle}}),
         url,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -181,7 +269,7 @@ ZarrsResult zarrsCreateStorageS3(const char *bucket, const char *prefix, const c
 """
 function zarrs_create_storage_s3(bucket, prefix, region, endpoint_url, anonymous)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateStorageS3, libzarrs_jl),
         ZarrsResult,
         (Cstring, Cstring, Cstring, Cstring, Int32, Ptr{Ptr{StorageHandle}}),
@@ -190,7 +278,7 @@ function zarrs_create_storage_s3(bucket, prefix, region, endpoint_url, anonymous
         region,
         endpoint_url,
         anonymous,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -206,14 +294,14 @@ ZarrsResult zarrsCreateStorageGCS(const char *bucket, const char *prefix, int32_
 """
 function zarrs_create_storage_gcs(bucket, prefix, anonymous)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateStorageGCS, libzarrs_jl),
         ZarrsResult,
         (Cstring, Cstring, Int32, Ptr{Ptr{StorageHandle}}),
         bucket,
         prefix,
         anonymous,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -247,14 +335,14 @@ ZarrsResult zarrsCreateArrayRW(StorageHandle *storage, const char *path, const c
 """
 function zarrs_create_array_rw(storage, path, metadata_json)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateArrayRW, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Cstring, Ptr{Ptr{ArrayHandle}}),
         storage,
         path,
         metadata_json,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -270,13 +358,13 @@ ZarrsResult zarrsOpenArrayRW(StorageHandle *storage, const char *path, ArrayHand
 """
 function zarrs_open_array_rw(storage, path)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsOpenArrayRW, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Ptr{Ptr{ArrayHandle}}),
         storage,
         path,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -306,12 +394,12 @@ ZarrsResult zarrsArrayGetDimensionality(ArrayHandle *array, uintptr_t *pDimensio
 """
 function zarrs_array_get_dimensionality(array)
     _out_ref = Ref{Csize_t}(zero(Csize_t))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetDimensionality, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Ptr{Csize_t}),
         array,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
@@ -326,13 +414,13 @@ ZarrsResult zarrsArrayGetShape(ArrayHandle *array, uintptr_t dimensionality, uin
 ```
 """
 function zarrs_array_get_shape(array, dimensionality, pShape)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetShape, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}),
         array,
         dimensionality,
-        pShape,
+        pShape
     )
     check_error(_result)
 end
@@ -347,12 +435,12 @@ ZarrsResult zarrsArrayGetDataType(ArrayHandle *array, int32_t *pDataType);
 """
 function zarrs_array_get_data_type(array)
     _out_ref = Ref{Int32}(zero(Int32))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetDataType, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Ptr{Int32}),
         array,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
@@ -368,13 +456,13 @@ ZarrsResult zarrsArrayGetMetadataString(ArrayHandle *array, int32_t pretty, char
 """
 function zarrs_array_get_metadata_string(array, pretty)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetMetadataString, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Int32, Ptr{Cstring}),
         array,
         pretty,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -395,13 +483,13 @@ ZarrsResult zarrsArrayGetAttributes(ArrayHandle *array, int32_t pretty, char **p
 """
 function zarrs_array_get_attributes(array, pretty)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetAttributes, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Int32, Ptr{Cstring}),
         array,
         pretty,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -421,12 +509,12 @@ ZarrsResult zarrsArraySetAttributes(ArrayHandle *array, const char *attributes);
 ```
 """
 function zarrs_array_set_attributes(array, attributes)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArraySetAttributes, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Cstring),
         array,
-        attributes,
+        attributes
     )
     check_error(_result)
 end
@@ -440,11 +528,11 @@ ZarrsResult zarrsArrayStoreMetadata(ArrayHandle *array);
 ```
 """
 function zarrs_array_store_metadata(array)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayStoreMetadata, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle},),
-        array,
+        array
     )
     check_error(_result)
 end
@@ -459,14 +547,14 @@ ZarrsResult zarrsArrayGetSubsetSize(ArrayHandle *array, uintptr_t dimensionality
 """
 function zarrs_array_get_subset_size(array, dimensionality, pSubsetShape)
     _out_ref = Ref{Csize_t}(zero(Csize_t))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetSubsetSize, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{Csize_t}),
         array,
         dimensionality,
         pSubsetShape,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
@@ -488,7 +576,7 @@ function zarrs_array_retrieve_subset(
     subsetBytesCount,
     pSubsetBytes,
 )
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayRetrieveSubset, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}, Csize_t, Ptr{UInt8}),
@@ -497,7 +585,7 @@ function zarrs_array_retrieve_subset(
         pSubsetStart,
         pSubsetShape,
         subsetBytesCount,
-        pSubsetBytes,
+        pSubsetBytes
     )
     check_error(_result)
 end
@@ -518,7 +606,7 @@ function zarrs_array_store_subset(
     subsetBytesCount,
     pSubsetBytes,
 )
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayStoreSubset, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}, Csize_t, Ptr{UInt8}),
@@ -527,7 +615,7 @@ function zarrs_array_store_subset(
         pSubsetStart,
         pSubsetShape,
         subsetBytesCount,
-        pSubsetBytes,
+        pSubsetBytes
     )
     check_error(_result)
 end
@@ -541,13 +629,13 @@ ZarrsResult zarrsArrayGetChunkGridShape(ArrayHandle *array, uintptr_t dimensiona
 ```
 """
 function zarrs_array_get_chunk_grid_shape(array, dimensionality, pChunkGridShape)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetChunkGridShape, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}),
         array,
         dimensionality,
-        pChunkGridShape,
+        pChunkGridShape
     )
     check_error(_result)
 end
@@ -562,14 +650,14 @@ ZarrsResult zarrsArrayGetChunkSize(ArrayHandle *array, uintptr_t dimensionality,
 """
 function zarrs_array_get_chunk_size(array, dimensionality, pChunkIndices)
     _out_ref = Ref{Csize_t}(zero(Csize_t))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetChunkSize, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{Csize_t}),
         array,
         dimensionality,
         pChunkIndices,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
@@ -590,7 +678,7 @@ function zarrs_array_retrieve_chunk(
     chunkBytesCount,
     pChunkBytes,
 )
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayRetrieveChunk, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Csize_t, Ptr{UInt8}),
@@ -598,7 +686,7 @@ function zarrs_array_retrieve_chunk(
         dimensionality,
         pChunkIndices,
         chunkBytesCount,
-        pChunkBytes,
+        pChunkBytes
     )
     check_error(_result)
 end
@@ -618,7 +706,7 @@ function zarrs_array_store_chunk(
     chunkBytesCount,
     pChunkBytes,
 )
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayStoreChunk, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Csize_t, Ptr{UInt8}),
@@ -626,7 +714,7 @@ function zarrs_array_store_chunk(
         dimensionality,
         pChunkIndices,
         chunkBytesCount,
-        pChunkBytes,
+        pChunkBytes
     )
     check_error(_result)
 end
@@ -640,14 +728,14 @@ ZarrsResult zarrsArrayGetChunkOrigin(ArrayHandle *array, uintptr_t dimensionalit
 ```
 """
 function zarrs_array_get_chunk_origin(array, dimensionality, pChunkIndices, pChunkOrigin)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetChunkOrigin, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}),
         array,
         dimensionality,
         pChunkIndices,
-        pChunkOrigin,
+        pChunkOrigin
     )
     check_error(_result)
 end
@@ -661,14 +749,14 @@ ZarrsResult zarrsArrayGetChunkShape(ArrayHandle *array, uintptr_t dimensionality
 ```
 """
 function zarrs_array_get_chunk_shape(array, dimensionality, pChunkIndices, pChunkShape)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetChunkShape, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{UInt64}, Ptr{UInt64}),
         array,
         dimensionality,
         pChunkIndices,
-        pChunkShape,
+        pChunkShape
     )
     check_error(_result)
 end
@@ -682,14 +770,14 @@ ZarrsResult zarrsArrayGetSubChunkShape(ArrayHandle *array, uintptr_t dimensional
 ```
 """
 function zarrs_array_get_sub_chunk_shape(array, dimensionality, pIsSharded, pSubChunkShape)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsArrayGetSubChunkShape, libzarrs_jl),
         ZarrsResult,
         (Ptr{ArrayHandle}, Csize_t, Ptr{Int32}, Ptr{UInt64}),
         array,
         dimensionality,
         pIsSharded,
-        pSubChunkShape,
+        pSubChunkShape
     )
     check_error(_result)
 end
@@ -704,14 +792,14 @@ ZarrsResult zarrsCreateGroupRW(StorageHandle *storage, const char *path, const c
 """
 function zarrs_create_group_rw(storage, path, metadata_json)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsCreateGroupRW, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Cstring, Ptr{Ptr{GroupHandle}}),
         storage,
         path,
         metadata_json,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -727,13 +815,13 @@ ZarrsResult zarrsOpenGroupRW(StorageHandle *storage, const char *path, GroupHand
 """
 function zarrs_open_group_rw(storage, path)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsOpenGroupRW, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Ptr{Ptr{GroupHandle}}),
         storage,
         path,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -763,13 +851,13 @@ ZarrsResult zarrsGroupGetAttributes(GroupHandle *group, int32_t pretty, char **p
 """
 function zarrs_group_get_attributes(group, pretty)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsGroupGetAttributes, libzarrs_jl),
         ZarrsResult,
         (Ptr{GroupHandle}, Int32, Ptr{Cstring}),
         group,
         pretty,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -789,12 +877,12 @@ ZarrsResult zarrsGroupSetAttributes(GroupHandle *group, const char *attributes);
 ```
 """
 function zarrs_group_set_attributes(group, attributes)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsGroupSetAttributes, libzarrs_jl),
         ZarrsResult,
         (Ptr{GroupHandle}, Cstring),
         group,
-        attributes,
+        attributes
     )
     check_error(_result)
 end
@@ -808,11 +896,11 @@ ZarrsResult zarrsGroupStoreMetadata(GroupHandle *group);
 ```
 """
 function zarrs_group_store_metadata(group)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsGroupStoreMetadata, libzarrs_jl),
         ZarrsResult,
         (Ptr{GroupHandle},),
-        group,
+        group
     )
     check_error(_result)
 end
@@ -828,14 +916,14 @@ ZarrsResult zarrsJlArrayResize(StorageHandle *storage, const char *path, uintptr
 ```
 """
 function zarrs_jl_array_resize(storage, path, ndim, new_shape)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsJlArrayResize, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Csize_t, Ptr{UInt64}),
         storage,
         path,
         ndim,
-        new_shape,
+        new_shape
     )
     check_error(_result)
 end
@@ -852,13 +940,13 @@ ZarrsResult zarrsJlStorageListDir(StorageHandle *storage, const char *path, char
 """
 function zarrs_jl_storage_list_dir(storage, path)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsJlStorageListDir, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Ptr{Cstring}),
         storage,
         path,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -881,13 +969,13 @@ ZarrsResult zarrsJlStorageGet(StorageHandle *storage, const char *key, char **da
 """
 function zarrs_jl_storage_get(storage, key)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsJlStorageGet, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Ptr{Cstring}),
         storage,
         key,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -909,14 +997,14 @@ ZarrsResult zarrsJlArrayEraseChunk(StorageHandle *storage, const char *path, uin
 ```
 """
 function zarrs_jl_array_erase_chunk(storage, path, ndim, indices)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsJlArrayEraseChunk, libzarrs_jl),
         ZarrsResult,
         (Ptr{StorageHandle}, Cstring, Csize_t, Ptr{UInt64}),
         storage,
         path,
         ndim,
-        indices,
+        indices
     )
     check_error(_result)
 end
@@ -941,7 +1029,7 @@ function zarrs_icechunk_s3_storage(
     session_token,
 )
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkS3Storage, libzarrs_jl),
         ZarrsResult,
         (
@@ -965,7 +1053,7 @@ function zarrs_icechunk_s3_storage(
         access_key_id,
         secret_access_key,
         session_token,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -981,7 +1069,7 @@ ZarrsResult zarrsIcechunkGcsStorage(const char *bucket, const char *prefix, int3
 """
 function zarrs_icechunk_gcs_storage(bucket, prefix, credential_type, credential_value)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkGcsStorage, libzarrs_jl),
         ZarrsResult,
         (Cstring, Cstring, Int32, Cstring, Ptr{Ptr{IcStorageHandle}}),
@@ -989,7 +1077,78 @@ function zarrs_icechunk_gcs_storage(bucket, prefix, credential_type, credential_
         prefix,
         credential_type,
         credential_value,
-        _handle_ptr,
+        _handle_ptr
+    )
+    check_error(_result)
+    return _handle_ptr[]
+end
+
+"""
+    zarrs_icechunk_s3_storage_refreshable(bucket, prefix, region, endpoint_url, allow_http, force_path_style, callback_id)
+
+S3 storage whose credentials come from a Julia function (refreshed by icechunk before they expire). `callback_id` identifies the function in Zarrs.jl's credential registry; see `credentials.rs` for how the function is called without running Julia on Tokio threads.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkS3StorageRefreshable(const char *bucket, const char *prefix, const char *region, const char *endpoint_url, int32_t allow_http, int32_t force_path_style, uint64_t callback_id, IcStorageHandle **pHandle);
+```
+"""
+function zarrs_icechunk_s3_storage_refreshable(
+    bucket,
+    prefix,
+    region,
+    endpoint_url,
+    allow_http,
+    force_path_style,
+    callback_id,
+)
+    _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkS3StorageRefreshable, libzarrs_jl),
+        ZarrsResult,
+        (
+            Cstring,
+            Cstring,
+            Cstring,
+            Cstring,
+            Int32,
+            Int32,
+            UInt64,
+            Ptr{Ptr{IcStorageHandle}},
+        ),
+        bucket,
+        prefix,
+        region,
+        endpoint_url,
+        allow_http,
+        force_path_style,
+        callback_id,
+        _handle_ptr
+    )
+    check_error(_result)
+    return _handle_ptr[]
+end
+
+"""
+    zarrs_icechunk_gcs_storage_refreshable(bucket, prefix, callback_id)
+
+GCS storage whose bearer token comes from a Julia function (see `zarrsIcechunkS3StorageRefreshable`).
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkGcsStorageRefreshable(const char *bucket, const char *prefix, uint64_t callback_id, IcStorageHandle **pHandle);
+```
+"""
+function zarrs_icechunk_gcs_storage_refreshable(bucket, prefix, callback_id)
+    _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkGcsStorageRefreshable, libzarrs_jl),
+        ZarrsResult,
+        (Cstring, Cstring, UInt64, Ptr{Ptr{IcStorageHandle}}),
+        bucket,
+        prefix,
+        callback_id,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1011,7 +1170,7 @@ function zarrs_icechunk_azure_storage(
     credential_value,
 )
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkAzureStorage, libzarrs_jl),
         ZarrsResult,
         (Cstring, Cstring, Cstring, Int32, Cstring, Ptr{Ptr{IcStorageHandle}}),
@@ -1020,7 +1179,7 @@ function zarrs_icechunk_azure_storage(
         prefix,
         credential_type,
         credential_value,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1036,12 +1195,12 @@ ZarrsResult zarrsIcechunkLocalStorage(const char *path, IcStorageHandle **pHandl
 """
 function zarrs_icechunk_local_storage(path)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkLocalStorage, libzarrs_jl),
         ZarrsResult,
         (Cstring, Ptr{Ptr{IcStorageHandle}}),
         path,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1057,11 +1216,11 @@ ZarrsResult zarrsIcechunkMemoryStorage(IcStorageHandle **pHandle);
 """
 function zarrs_icechunk_memory_storage()
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkMemoryStorage, libzarrs_jl),
         ZarrsResult,
         (Ptr{Ptr{IcStorageHandle}},),
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1095,12 +1254,12 @@ ZarrsResult zarrsIcechunkRepoOpen(IcStorageHandle *ic_storage, IcRepoHandle **pR
 """
 function zarrs_icechunk_repo_open(ic_storage)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoOpen, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcStorageHandle}, Ptr{Ptr{IcRepoHandle}}),
         ic_storage,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1116,12 +1275,12 @@ ZarrsResult zarrsIcechunkRepoCreate(IcStorageHandle *ic_storage, IcRepoHandle **
 """
 function zarrs_icechunk_repo_create(ic_storage)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoCreate, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcStorageHandle}, Ptr{Ptr{IcRepoHandle}}),
         ic_storage,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1137,12 +1296,12 @@ ZarrsResult zarrsIcechunkRepoOpenOrCreate(IcStorageHandle *ic_storage, IcRepoHan
 """
 function zarrs_icechunk_repo_open_or_create(ic_storage)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoOpenOrCreate, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcStorageHandle}, Ptr{Ptr{IcRepoHandle}}),
         ic_storage,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1176,12 +1335,12 @@ ZarrsResult zarrsIcechunkRepoListBranches(IcRepoHandle *repo, char **pJson);
 """
 function zarrs_icechunk_repo_list_branches(repo)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoListBranches, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Ptr{Cstring}),
         repo,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1202,12 +1361,12 @@ ZarrsResult zarrsIcechunkRepoListTags(IcRepoHandle *repo, char **pJson);
 """
 function zarrs_icechunk_repo_list_tags(repo)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoListTags, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Ptr{Cstring}),
         repo,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1228,14 +1387,14 @@ ZarrsResult zarrsIcechunkRepoCreateBranch(IcRepoHandle *repo, const char *name, 
 """
 function zarrs_icechunk_repo_create_branch(repo, name, snapshot_id_str)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoCreateBranch, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring, Cstring, Ptr{Cstring}),
         repo,
         name,
         snapshot_id_str,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1255,12 +1414,12 @@ ZarrsResult zarrsIcechunkRepoDeleteBranch(IcRepoHandle *repo, const char *name);
 ```
 """
 function zarrs_icechunk_repo_delete_branch(repo, name)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoDeleteBranch, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring),
         repo,
-        name,
+        name
     )
     check_error(_result)
 end
@@ -1275,14 +1434,14 @@ ZarrsResult zarrsIcechunkRepoCreateTag(IcRepoHandle *repo, const char *name, con
 """
 function zarrs_icechunk_repo_create_tag(repo, name, snapshot_id_str)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoCreateTag, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring, Cstring, Ptr{Cstring}),
         repo,
         name,
         snapshot_id_str,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1302,12 +1461,12 @@ ZarrsResult zarrsIcechunkRepoDeleteTag(IcRepoHandle *repo, const char *name);
 ```
 """
 function zarrs_icechunk_repo_delete_tag(repo, name)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoDeleteTag, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring),
         repo,
-        name,
+        name
     )
     check_error(_result)
 end
@@ -1322,13 +1481,13 @@ ZarrsResult zarrsIcechunkRepoLookupBranch(IcRepoHandle *repo, const char *name, 
 """
 function zarrs_icechunk_repo_lookup_branch(repo, name)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoLookupBranch, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring, Ptr{Cstring}),
         repo,
         name,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1349,13 +1508,13 @@ ZarrsResult zarrsIcechunkRepoLookupTag(IcRepoHandle *repo, const char *name, cha
 """
 function zarrs_icechunk_repo_lookup_tag(repo, name)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkRepoLookupTag, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring, Ptr{Cstring}),
         repo,
         name,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1378,14 +1537,14 @@ ZarrsResult zarrsIcechunkReadonlySession(IcRepoHandle *repo, int32_t version_typ
 """
 function zarrs_icechunk_readonly_session(repo, version_type, version_value)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkReadonlySession, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Int32, Cstring, Ptr{Ptr{IcSessionHandle}}),
         repo,
         version_type,
         version_value,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1403,13 +1562,13 @@ ZarrsResult zarrsIcechunkWritableSession(IcRepoHandle *repo, const char *branch,
 """
 function zarrs_icechunk_writable_session(repo, branch)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkWritableSession, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcRepoHandle}, Cstring, Ptr{Ptr{IcSessionHandle}}),
         repo,
         branch,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1445,12 +1604,12 @@ ZarrsResult zarrsIcechunkSessionGetStorage(IcSessionHandle *session, StorageHand
 """
 function zarrs_icechunk_session_get_storage(session)
     _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkSessionGetStorage, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcSessionHandle}, Ptr{Ptr{StorageHandle}}),
         session,
-        _handle_ptr,
+        _handle_ptr
     )
     check_error(_result)
     return _handle_ptr[]
@@ -1468,12 +1627,12 @@ ZarrsResult zarrsIcechunkSessionReadOnly(IcSessionHandle *session, int32_t *pRea
 """
 function zarrs_icechunk_session_read_only(session)
     _out_ref = Ref{Int32}(zero(Int32))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkSessionReadOnly, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcSessionHandle}, Ptr{Int32}),
         session,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
@@ -1491,13 +1650,13 @@ ZarrsResult zarrsIcechunkSessionCommit(IcSessionHandle *session, const char *mes
 """
 function zarrs_icechunk_session_commit(session, message)
     _str_ptr = Ref{Cstring}(C_NULL)
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkSessionCommit, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcSessionHandle}, Cstring, Ptr{Cstring}),
         session,
         message,
-        _str_ptr,
+        _str_ptr
     )
     check_error(_result)
     if _str_ptr[] == C_NULL
@@ -1520,15 +1679,146 @@ ZarrsResult zarrsIcechunkSessionHasChanges(IcSessionHandle *session, int32_t *pH
 """
 function zarrs_icechunk_session_has_changes(session)
     _out_ref = Ref{Int32}(zero(Int32))
-    _result = ccall(
+    _result = @zarrs_ccall(
         (:zarrsIcechunkSessionHasChanges, libzarrs_jl),
         ZarrsResult,
         (Ptr{IcSessionHandle}, Ptr{Int32}),
         session,
-        _out_ref,
+        _out_ref
     )
     check_error(_result)
     return _out_ref[]
+end
+
+"""
+    zarrs_credentials_set_notifier(handle, uv_async_send)
+
+Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the Julia credential service. Passing the function pointer avoids linking against libuv.
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsSetNotifier(void *handle, void *uv_async_send);
+```
+"""
+function zarrs_credentials_set_notifier(handle, uv_async_send)
+    _result = ccall(
+        (:zarrsCredentialsSetNotifier, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        handle,
+        uv_async_send,
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_credentials_set_timeout(seconds)
+
+Seconds a fetcher waits for Julia before failing (default 120).
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsSetTimeout(uint64_t seconds);
+```
+"""
+function zarrs_credentials_set_timeout(seconds)
+    _result =
+        ccall((:zarrsCredentialsSetTimeout, libzarrs_jl), ZarrsResult, (UInt64,), seconds)
+    check_error(_result)
+end
+
+"""
+    zarrs_credentials_take_request(pRequestId, pCallbackId)
+
+Take one pending request into the outputs; request id 0 means the queue was empty.
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsTakeRequest(uint64_t *pRequestId, uint64_t *pCallbackId);
+```
+"""
+function zarrs_credentials_take_request(pRequestId, pCallbackId)
+    _result = ccall(
+        (:zarrsCredentialsTakeRequest, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{UInt64}, Ptr{UInt64}),
+        pRequestId,
+        pCallbackId,
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_credentials_provide_s3(request_id, access_key_id, secret_access_key, session_token, expires_after)
+
+Answer an S3 request. `expires_after` is seconds since the Unix epoch (NaN or <= 0: never).
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsProvideS3(uint64_t request_id, const char *access_key_id, const char *secret_access_key, const char *session_token, double expires_after);
+```
+"""
+function zarrs_credentials_provide_s3(
+    request_id,
+    access_key_id,
+    secret_access_key,
+    session_token,
+    expires_after,
+)
+    _result = ccall(
+        (:zarrsCredentialsProvideS3, libzarrs_jl),
+        ZarrsResult,
+        (UInt64, Cstring, Cstring, Cstring, Cdouble),
+        request_id,
+        access_key_id,
+        secret_access_key,
+        session_token,
+        expires_after,
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_credentials_provide_gcs(request_id, bearer, expires_after)
+
+Answer a GCS request with a bearer token. `expires_after` as for `zarrsCredentialsProvideS3`.
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsProvideGcs(uint64_t request_id, const char *bearer, double expires_after);
+```
+"""
+function zarrs_credentials_provide_gcs(request_id, bearer, expires_after)
+    _result = ccall(
+        (:zarrsCredentialsProvideGcs, libzarrs_jl),
+        ZarrsResult,
+        (UInt64, Cstring, Cdouble),
+        request_id,
+        bearer,
+        expires_after,
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_credentials_provide_error(request_id, message)
+
+Answer a request with an error (for example, the Julia function threw).
+
+### Prototype
+```c
+ZarrsResult zarrsCredentialsProvideError(uint64_t request_id, const char *message);
+```
+"""
+function zarrs_credentials_provide_error(request_id, message)
+    _result = ccall(
+        (:zarrsCredentialsProvideError, libzarrs_jl),
+        ZarrsResult,
+        (UInt64, Cstring),
+        request_id,
+        message,
+    )
+    check_error(_result)
 end
 
 
