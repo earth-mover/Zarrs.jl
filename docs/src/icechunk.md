@@ -240,6 +240,44 @@ create_tag(repo, "v2.0", snap_id)
 delete_tag(repo, "v2.0")
 ```
 
+## Virtual Chunks
+
+Virtual chunks are chunks stored in other files (NetCDF/HDF5, GRIB, raw binary, ...) that the
+repository references by URL, offset and length instead of copying. Declare where they may live
+with a `VirtualChunkContainer` in the repository configuration, and authorize reading from it
+with credentials when opening the repository:
+
+```julia
+config = RepositoryConfig(virtual_chunk_containers = [
+    VirtualChunkContainer("s3://noaa-data/", s3_store(region = "us-east-1")),
+    VirtualChunkContainer("file:///data/netcdf/", local_filesystem_store("/data/netcdf")),
+])
+repo = Repository(storage; mode = :create, config,
+                  authorize_virtual_chunk_access = Dict(
+                      "s3://noaa-data/" => :anonymous,          # or S3Credentials(...), :from_env
+                      "file:///data/netcdf/" => nothing))       # file:// and http(s):// need none
+```
+
+On `:create` the configuration is stored with the repository. When opening an existing
+repository, `config` is merged over the stored configuration; `save_config(repo)` stores it.
+Only containers listed in `authorize_virtual_chunk_access` can be read.
+
+Write references to existing data (the chunk key uses Zarr (C) dimension order, zero-based):
+
+```julia
+session = writable_session(repo, "main")
+create_group(session)
+create_array(session, "t", Float64, 12; chunks = (4,), compressor = "none")
+set_virtual_ref(session, "t/c/0", "s3://noaa-data/file.bin"; offset = 0, length = 32,
+                etag = "\"abc123\"")   # optional: fail reads if the object changed
+commit(session, "virtual references")
+```
+
+Reading is transparent: `zopen(readonly_session(repo), "t")[:]` fetches the referenced bytes.
+`virtual_chunk_locations(session)` lists the objects a snapshot references, and
+`repository_config(repo)` shows the effective configuration. Store options: `s3_store`
+(S3, or S3-compatible with `endpoint_url`), `gcs_store`, `http_store`, `local_filesystem_store`.
+
 ## Complete Example
 
 ```julia

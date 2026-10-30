@@ -2011,6 +2011,151 @@ function zarrs_icechunk_repo_reset_branch(repo, branch, snapshot_id)
 end
 
 """
+    zarrs_icechunk_repo_open_with_config(ic_storage, mode, config_json, credentials_json)
+
+Open (`mode` 0), create (1) or open-or-create (2) a repository with a configuration and virtual chunk credentials.
+
+`config_json`: an icechunk `RepositoryConfig` as JSON (its serde form, e.g. `{"inline\\_chunk\\_threshold\\_bytes": 512, "virtual\\_chunk\\_containers": {...}}`), or null. On open, it is merged over the configuration stored in the repository. `credentials_json`: a JSON object mapping virtual chunk container URL prefixes to icechunk `Credentials` (serde form) or `null`, or null for none. Containers not listed cannot be read.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoOpenWithConfig(IcStorageHandle *ic_storage, int32_t mode, const char *config_json, const char *credentials_json, IcRepoHandle **pRepo);
+```
+"""
+function zarrs_icechunk_repo_open_with_config(
+    ic_storage,
+    mode,
+    config_json,
+    credentials_json,
+)
+    _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoOpenWithConfig, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcStorageHandle}, Int32, Cstring, Cstring, Ptr{Ptr{IcRepoHandle}}),
+        ic_storage,
+        mode,
+        config_json,
+        credentials_json,
+        _handle_ptr
+    )
+    check_error(_result)
+    return _handle_ptr[]
+end
+
+"""
+    zarrs_icechunk_repo_config(repo)
+
+The repository's configuration (stored configuration merged with the one it was opened with) as JSON.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoConfig(IcRepoHandle *repo, char **pJson);
+```
+"""
+function zarrs_icechunk_repo_config(repo)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoConfig, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle}, Ptr{Cstring}),
+        repo,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_repo_save_config(repo)
+
+Persist the repository's current configuration (e.g. its virtual chunk containers) in the repository, so later opens use it.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoSaveConfig(IcRepoHandle *repo);
+```
+"""
+function zarrs_icechunk_repo_save_config(repo)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoSaveConfig, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle},),
+        repo
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_icechunk_session_set_virtual_ref(session, key, location, offset, length, etag, last_modified, validate_container)
+
+Point the chunk at store key `key` (e.g. `"array/c/0/1"`) to `length` bytes at `offset` in the object at `location` (a URL inside a virtual chunk container). `etag` (or null) and `last_modified` (seconds since the epoch, or 0) guard against the object changing: reads fail if it no longer matches. With `validate_container` set, the location must belong to a container declared in the repository configuration.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionSetVirtualRef(IcSessionHandle *session, const char *key, const char *location, uint64_t offset, uint64_t length, const char *etag, uint32_t last_modified, int32_t validate_container);
+```
+"""
+function zarrs_icechunk_session_set_virtual_ref(
+    session,
+    key,
+    location,
+    offset,
+    length,
+    etag,
+    last_modified,
+    validate_container,
+)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionSetVirtualRef, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Cstring, Cstring, UInt64, UInt64, Cstring, UInt32, Int32),
+        session,
+        key,
+        location,
+        offset,
+        length,
+        etag,
+        last_modified,
+        validate_container
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_icechunk_session_virtual_chunk_locations(session)
+
+All virtual chunk locations referenced by the session's snapshot, as a JSON array of URLs.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionVirtualChunkLocations(IcSessionHandle *session, char **pJson);
+```
+"""
+function zarrs_icechunk_session_virtual_chunk_locations(session)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionVirtualChunkLocations, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Ptr{Cstring}),
+        session,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
     zarrs_credentials_set_notifier(handle, uv_async_send)
 
 Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the Julia credential service. Passing the function pointer avoids linking against libuv.

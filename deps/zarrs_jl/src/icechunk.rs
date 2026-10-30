@@ -1548,3 +1548,197 @@ pub unsafe extern "C" fn zarrsIcechunkRepoResetBranch(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Repository configuration and virtual chunks
+// ---------------------------------------------------------------------------
+
+/// Open (`mode` 0), create (1) or open-or-create (2) a repository with a configuration and
+/// virtual chunk credentials.
+///
+/// `config_json`: an icechunk `RepositoryConfig` as JSON (its serde form, e.g.
+/// `{"inline_chunk_threshold_bytes": 512, "virtual_chunk_containers": {...}}`), or null. On
+/// open, it is merged over the configuration stored in the repository.
+/// `credentials_json`: a JSON object mapping virtual chunk container URL prefixes to icechunk
+/// `Credentials` (serde form) or `null`, or null for none. Containers not listed cannot be read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoOpenWithConfig(
+    ic_storage: *mut IcStorageHandle,
+    mode: i32,
+    config_json: *const c_char,
+    credentials_json: *const c_char,
+    pRepo: *mut *mut IcRepoHandle,
+) -> ZarrsResult {
+    if ic_storage.is_null() || pRepo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let config: Option<icechunk::RepositoryConfig> = match opt_string(config_json) {
+        None => None,
+        Some(json) => match serde_json::from_str(&json) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                set_error(format!("invalid repository config: {e}"));
+                return ZarrsResult::ZARRS_ERROR_INVALID_METADATA;
+            }
+        },
+    };
+    let credentials: std::collections::HashMap<String, Option<icechunk::config::Credentials>> =
+        match opt_string(credentials_json) {
+            None => Default::default(),
+            Some(json) => match serde_json::from_str(&json) {
+                Ok(c) => c,
+                Err(e) => {
+                    set_error(format!("invalid virtual chunk credentials: {e}"));
+                    return ZarrsResult::ZARRS_ERROR_INVALID_METADATA;
+                }
+            },
+        };
+
+    let ic = unsafe { &*ic_storage };
+    let storage = ic.storage.clone();
+    let runtime = ic.runtime;
+    let result = runtime.block_on(async {
+        macro_rules! build {
+            ($builder:expr) => {{
+                let mut b = $builder.authorize_virtual_chunk_access(credentials);
+                if let Some(c) = config {
+                    b = b.config(c);
+                }
+                b.execute().await
+            }};
+        }
+        match mode {
+            0 => build!(icechunk::Repository::open(storage)),
+            1 => build!(icechunk::Repository::create(storage)),
+            2 => build!(icechunk::Repository::open_or_create(storage)),
+            _ => return Err(format!("Invalid mode: {mode}")),
+        }
+        .map_err(|e| format!("Repository open error: {e}"))
+    });
+    match result {
+        Ok(repo) => {
+            let handle = Box::new(IcRepoHandle { repo, runtime });
+            unsafe { *pRepo = Box::into_raw(handle) };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// The repository's configuration (stored configuration merged with the one it was opened
+/// with) as JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoConfig(
+    repo: *mut IcRepoHandle,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let rh = unsafe { &*repo };
+    let result = serde_json::to_string(rh.repo.config()).map_err(|e| e.to_string());
+    unsafe { string_out(result, pJson) }
+}
+
+/// Persist the repository's current configuration (e.g. its virtual chunk containers) in the
+/// repository, so later opens use it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoSaveConfig(repo: *mut IcRepoHandle) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let rh = unsafe { &*repo };
+    let result = rh
+        .runtime
+        .block_on(async { rh.repo.save_config().await.map_err(|e| format!("save_config error: {e}")) });
+    match result {
+        Ok(_) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// Point the chunk at store key `key` (e.g. `"array/c/0/1"`) to `length` bytes at `offset` in
+/// the object at `location` (a URL inside a virtual chunk container). `etag` (or null) and
+/// `last_modified` (seconds since the epoch, or 0) guard against the object changing: reads
+/// fail if it no longer matches. With `validate_container` set, the location must belong to a
+/// container declared in the repository configuration.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionSetVirtualRef(
+    session: *mut IcSessionHandle,
+    key: *const c_char,
+    location: *const c_char,
+    offset: u64,
+    length: u64,
+    etag: *const c_char,
+    last_modified: u32,
+    validate_container: i32,
+) -> ZarrsResult {
+    if session.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let (key_str, location_str) = match (str_from_ptr(key), str_from_ptr(location)) {
+        (Ok(k), Ok(l)) => (k.to_string(), l.to_string()),
+        (Err(r), _) | (_, Err(r)) => return r,
+    };
+    let location = match icechunk::format::manifest::VirtualChunkLocation::from_url(&location_str) {
+        Ok(l) => l,
+        Err(e) => {
+            set_error(format!("invalid virtual chunk location {location_str:?}: {e}"));
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+    };
+    let checksum: Option<icechunk::format::manifest::Checksum> = match opt_string(etag) {
+        Some(tag) => serde_json::from_value(serde_json::json!({ "ETag": tag })).ok(),
+        None if last_modified > 0 => {
+            serde_json::from_value(serde_json::json!({ "LastModified": last_modified })).ok()
+        }
+        None => None,
+    };
+    let reference = icechunk::format::manifest::VirtualChunkRef { location, offset, length, checksum };
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        sh.store
+            .set_virtual_ref(&key_str, reference, validate_container != 0)
+            .await
+            .map_err(|e| format!("set_virtual_ref error: {e}"))
+    });
+    match result {
+        Ok(()) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// All virtual chunk locations referenced by the session's snapshot, as a JSON array of URLs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionVirtualChunkLocations(
+    session: *mut IcSessionHandle,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        use futures::TryStreamExt;
+        let guard = sh.session.read().await;
+        let stream = guard
+            .all_virtual_chunk_locations()
+            .await
+            .map_err(|e| format!("virtual chunk locations error: {e}"))?;
+        let mut locations: Vec<String> =
+            stream.try_collect().await.map_err(|e| format!("virtual chunk locations error: {e}"))?;
+        locations.sort();
+        locations.dedup();
+        serde_json::to_string(&locations).map_err(|e| e.to_string())
+    });
+    unsafe { string_out(result, pJson) }
+}
