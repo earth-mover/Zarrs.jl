@@ -123,7 +123,7 @@ _lookup(id::UInt64) = lock(_REGISTRY_LOCK) do
     get(_REGISTRY, id, nothing)
 end
 
-"Number of registered credential functions (for tests)."
+# Number of registered credential functions (for tests).
 _registered_count() = lock(() -> length(_REGISTRY), _REGISTRY_LOCK)
 
 # --- the service task ----------------------------------------------------------------------------

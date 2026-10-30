@@ -57,6 +57,17 @@ end
         @test GCSStorage(bucket="b", credentials=RefreshableCredentials(() -> nothing)).credentials !== nothing
     end
 
+    if VERSION < v"1.12-"
+        # GC-safe off-thread calls (`@ccall gc_safe`) need Julia 1.12: refuse clearly.
+        @testset "refreshable credentials need Julia 1.12" begin
+            st = S3Storage(bucket="b", prefix="p", region="us-east-1", endpoint_url="http://127.0.0.1:9",
+                           allow_http=true, credentials=RefreshableCredentials(() -> S3Credentials("k", "s")))
+            err = try Repository(st); nothing catch e; e end
+            @test err !== nothing && occursin("Julia 1.12", sprint(showerror, err))
+            @test Zarrs.Icechunk._registered_count() == 0
+        end
+    else
+
     @testset "errors from the Julia function surface as Julia errors" begin
         set_credentials_timeout(30)
         # Nothing listens on port 9; the credentials are needed before any connection is made.
@@ -173,4 +184,5 @@ end
             @test Zarrs.Icechunk._registered_count() == before
         end
     end
+end  # VERSION >= 1.12
 end
