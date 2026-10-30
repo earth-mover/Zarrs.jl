@@ -4,7 +4,8 @@
 
 module Icechunk
 
-using ..Zarrs: ZarrsStorageHandle, ZarrsArrayHandle, ZarrsGroupHandle,
+import ..Zarrs
+using ..Zarrs: ZarrsStorageHandle, ZarrsArrayHandle, ZarrsGroupHandle, ZarrsArray, ZarrsGroup,
                _open_array, _open_group, LibZarrs, JSON
 
 import ..Zarrs: zopen
@@ -349,6 +350,17 @@ function delete_branch(repo::Repository, name::AbstractString)
 end
 
 """
+    reset_branch(repo::Repository, name::AbstractString, snapshot_id::AbstractString)
+
+Point branch `name` at `snapshot_id`. Snapshots that were only reachable from the old tip stay
+in storage until garbage-collected.
+"""
+function reset_branch(repo::Repository, name::AbstractString, snapshot_id::AbstractString)
+    LibZarrs.zarrs_icechunk_repo_reset_branch(repo.handle.ptr, String(name), String(snapshot_id))
+    return nothing
+end
+
+"""
     create_tag(repo::Repository, name::AbstractString, snapshot_id::AbstractString)
 
 Create a new tag pointing at the given snapshot ID.
@@ -414,34 +426,50 @@ struct Session
 end
 
 """
-    readonly_session(repo::Repository; branch="main", tag=nothing) -> Session
+    readonly_session(repo::Repository; branch="main", tag=nothing, snapshot_id=nothing,
+                     as_of=nothing) -> Session
 
-Create a read-only session on the repository.
+Create a read-only session on the repository. Select the version to read with one of:
 
-Specify either `branch` (default: "main") or `tag` to select which version to read.
+- `branch` (default `"main"`): the branch tip;
+- `tag`: a tag;
+- `snapshot_id`: a snapshot, by ID (from [`commit`](@ref), [`ancestry`](@ref),
+  [`lookup_branch`](@ref), ...);
+- `as_of` (a `Dates.DateTime` in UTC), together with `branch`: the last snapshot of the branch
+  written at or before that time.
 """
 function readonly_session(repo::Repository;
                           branch::Union{AbstractString,Nothing}=nothing,
-                          tag::Union{AbstractString,Nothing}=nothing)
-    if tag !== nothing
-        version_type = Cint(1)  # tag
-        version_value = String(tag)
+                          tag::Union{AbstractString,Nothing}=nothing,
+                          snapshot_id::Union{AbstractString,Nothing}=nothing,
+                          as_of::Union{Dates.DateTime,Nothing}=nothing)
+    count(!isnothing, (tag, snapshot_id)) + (branch !== nothing || as_of !== nothing) <= 1 ||
+        throw(ArgumentError("specify only one of `branch` (with optional `as_of`), `tag` or `snapshot_id`"))
+    session_ptr = if as_of !== nothing
+        LibZarrs.zarrs_icechunk_readonly_session_as_of(
+            repo.handle.ptr, branch === nothing ? "main" : String(branch), _rfc3339(as_of))
     else
-        version_type = Cint(0)  # branch
-        version_value = branch === nothing ? "main" : String(branch)
+        version_type, version_value = if tag !== nothing
+            Cint(1), String(tag)
+        elseif snapshot_id !== nothing
+            Cint(2), String(snapshot_id)
+        else
+            Cint(0), branch === nothing ? "main" : String(branch)
+        end
+        LibZarrs.zarrs_icechunk_readonly_session(repo.handle.ptr, version_type, version_value)
     end
-
-    session_ptr = LibZarrs.zarrs_icechunk_readonly_session(
-        repo.handle.ptr, version_type, version_value)
-
-    session_handle = SessionHandle(session_ptr, repo.handle)
-
-    # Get a zarrs-compatible storage handle from the session
-    storage_ptr = LibZarrs.zarrs_icechunk_session_get_storage(session_ptr)
-    storage_handle = ZarrsStorageHandle(storage_ptr)
-
-    return Session(session_handle, storage_handle)
+    return _session(session_ptr, repo)
 end
+
+function _session(session_ptr::Ptr{Cvoid}, repo::Repository)
+    session_handle = SessionHandle(session_ptr, repo.handle)
+    # A zarrs-compatible storage handle on the session's store
+    storage_ptr = LibZarrs.zarrs_icechunk_session_get_storage(session_ptr)
+    return Session(session_handle, ZarrsStorageHandle(storage_ptr))
+end
+
+# DateTime (UTC) -> "2026-10-30T12:34:56.789Z"
+_rfc3339(t::Dates.DateTime) = Dates.format(t, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sss") * "Z"
 
 """
     writable_session(repo::Repository, branch::AbstractString="main") -> Session
@@ -449,30 +477,31 @@ end
 Create a writable session on the given branch.
 """
 function writable_session(repo::Repository, branch::AbstractString="main")
-    session_ptr = LibZarrs.zarrs_icechunk_writable_session(
-        repo.handle.ptr, String(branch))
-
-    session_handle = SessionHandle(session_ptr, repo.handle)
-
-    storage_ptr = LibZarrs.zarrs_icechunk_session_get_storage(session_ptr)
-    storage_handle = ZarrsStorageHandle(storage_ptr)
-
-    return Session(session_handle, storage_handle)
+    session_ptr = LibZarrs.zarrs_icechunk_writable_session(repo.handle.ptr, String(branch))
+    return _session(session_ptr, repo)
 end
 
 """
-    commit(session::Session, message::AbstractString; metadata=nothing) -> String
+    commit(session::Session, message::AbstractString; metadata=nothing, amend=false,
+           allow_empty=false) -> String
 
-Commit changes in a writable session. Returns the snapshot ID string. `metadata` is an optional
-dictionary (or named tuple) of JSON-compatible values stored with the snapshot; see
-[`ancestry`](@ref).
+Commit changes in a writable session. Returns the new snapshot ID.
+
+- `metadata`: an optional dictionary (or named tuple) of JSON-compatible values stored with
+  the snapshot; see [`ancestry`](@ref).
+- `amend = true`: replace the branch tip with the new snapshot instead of adding one on top of
+  it (the previous tip drops out of the branch history).
+- `allow_empty = true`: commit even if the session has no changes.
 """
-function commit(session::Session, message::AbstractString; metadata=nothing)
-    metadata === nothing &&
+function commit(session::Session, message::AbstractString; metadata=nothing,
+                amend::Bool=false, allow_empty::Bool=false)
+    if metadata === nothing && !amend && !allow_empty
         return LibZarrs.zarrs_icechunk_session_commit(session.handle.ptr, String(message))
-    meta = metadata isa NamedTuple ? Dict(string(k) => v for (k, v) in pairs(metadata)) : metadata
-    return LibZarrs.zarrs_icechunk_session_commit_with_metadata(
-        session.handle.ptr, String(message), JSON.json(meta))
+    end
+    meta = metadata === nothing ? C_NULL :
+           JSON.json(metadata isa NamedTuple ? Dict(string(k) => v for (k, v) in pairs(metadata)) : metadata)
+    return LibZarrs.zarrs_icechunk_session_commit_with_options(
+        session.handle.ptr, String(message), meta, Cint(amend), Cint(allow_empty))
 end
 
 """
@@ -510,6 +539,78 @@ function has_uncommitted_changes(session::Session)
     return Bool(LibZarrs.zarrs_icechunk_session_has_changes(session.handle.ptr))
 end
 
+"""
+    snapshot_id(session::Session) -> String
+
+The snapshot the session reads, or, for a writable session, the snapshot its changes are based
+on.
+"""
+snapshot_id(session::Session) = LibZarrs.zarrs_icechunk_session_snapshot_id(session.handle.ptr)
+
+"""
+    session_branch(session::Session) -> Union{String,Nothing}
+
+The branch of a writable session, or of a read-only session opened on a branch tip; `nothing`
+otherwise (a tag or snapshot).
+"""
+function session_branch(session::Session)
+    b = LibZarrs.zarrs_icechunk_session_branch(session.handle.ptr)
+    return isempty(b) ? nothing : b
+end
+
+"""
+    discard_changes(session::Session)
+
+Drop all uncommitted changes of a writable session.
+"""
+function discard_changes(session::Session)
+    LibZarrs.zarrs_icechunk_session_discard_changes(session.handle.ptr)
+    return nothing
+end
+
+"""
+    status(session::Session) -> NamedTuple
+
+The uncommitted changes of a session, in the format of [`diff`](@ref).
+"""
+status(session::Session) = _parse_diff(LibZarrs.zarrs_icechunk_session_status(session.handle.ptr))
+
+"""
+    diff(repo::Repository; from_branch=nothing, from_tag=nothing, from_snapshot_id=nothing,
+         to_branch=nothing, to_tag=nothing, to_snapshot_id=nothing) -> NamedTuple
+
+The changes between two versions: those in `to` but not in `from`. Give exactly one `from_*`
+and one `to_*`. The result has fields `new_groups`, `new_arrays`, `deleted_groups`,
+`deleted_arrays`, `updated_groups`, `updated_arrays` (vectors of node paths),
+`updated_chunks` (node path => vector of chunk indices, zero-based and in Zarr (C) dimension
+order) and `moved_nodes` (vector of `(from, to)` path pairs).
+"""
+function Base.diff(repo::Repository; from_branch=nothing, from_tag=nothing, from_snapshot_id=nothing,
+                   to_branch=nothing, to_tag=nothing, to_snapshot_id=nothing)
+    fk, fv = _version_selector("from", from_branch, from_tag, from_snapshot_id)
+    tk, tv = _version_selector("to", to_branch, to_tag, to_snapshot_id)
+    return _parse_diff(LibZarrs.zarrs_icechunk_repo_diff(repo.handle.ptr, fk, fv, tk, tv))
+end
+
+function _version_selector(side, branch, tag, snapshot_id)
+    given = [(Cint(0), branch), (Cint(1), tag), (Cint(2), snapshot_id)]
+    given = filter(x -> x[2] !== nothing, given)
+    length(given) == 1 ||
+        throw(ArgumentError("give exactly one of $(side)_branch, $(side)_tag, $(side)_snapshot_id"))
+    return given[1][1], String(given[1][2])
+end
+
+function _parse_diff(json::AbstractString)
+    d = JSON.parse(json)
+    strs(x) = String[String(p) for p in x]
+    return (new_groups = strs(d["new_groups"]), new_arrays = strs(d["new_arrays"]),
+            deleted_groups = strs(d["deleted_groups"]), deleted_arrays = strs(d["deleted_arrays"]),
+            updated_groups = strs(d["updated_groups"]), updated_arrays = strs(d["updated_arrays"]),
+            updated_chunks = Dict{String,Vector{Vector{Int}}}(
+                String(k) => [Int.(c) for c in v] for (k, v) in d["updated_chunks"]),
+            moved_nodes = Tuple{String,String}[(String(m["from"]), String(m["to"])) for m in d["moved_nodes"]])
+end
+
 function Base.show(io::IO, s::Session)
     print(io, "Session()")
 end
@@ -537,6 +638,105 @@ function zopen(session::Session)
     end
 end
 
+"""
+    zopen(session::Session, path::AbstractString) -> ZarrsArray or ZarrsGroup
+
+Open the array or group at `path` (e.g. `"group/array"`) in an Icechunk session.
+"""
+function zopen(session::Session, path::AbstractString)
+    p = _node_path(path)
+    p == "/" && return zopen(session)
+    try
+        return _open_array(session.zarrs_storage, p, "icechunk")
+    catch e
+        try
+            return _open_group(session.zarrs_storage, p, "icechunk")
+        catch
+            rethrow(e)
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Creating groups and arrays
+# ---------------------------------------------------------------------------
+
+_node_path(path::AbstractString) = "/" * strip(String(path), '/')
+
+"""
+    create_group(session::Session, path::AbstractString="/"; attributes=Dict()) -> ZarrsGroup
+
+Create a Zarr V3 group at `path` in a writable session (`"/"` is the root group), with the
+given user attributes. Parent groups are not created implicitly; create them first.
+"""
+function create_group(session::Session, path::AbstractString="/";
+                      attributes::AbstractDict=Dict{String,Any}())
+    p = _node_path(path)
+    attrs = Dict{String,Any}(string(k) => v for (k, v) in attributes)
+    metadata = JSON.json(Dict("zarr_format" => 3, "node_type" => "group", "attributes" => attrs))
+    storage = session.zarrs_storage
+    ptr = LibZarrs.zarrs_create_group_rw(storage.ptr, p, metadata)
+    return ZarrsGroup(ZarrsGroupHandle(ptr, storage), storage, "icechunk", p, attrs)
+end
+
+"""
+    create_array(session::Session, path, T, dims...; chunks, compressor="zstd",
+                 compressor_level=3, fill_value=nothing, shard_shape=nothing,
+                 dimension_names=nothing, attributes=nothing) -> ZarrsArray{T,N}
+    create_array(session::Session, path; metadata) -> ZarrsArray
+
+Create a Zarr V3 array at `path` in a writable session and return it, ready for writing.
+
+The first form takes the same options as [`zcreate`](@ref Zarrs.zcreate) (`dims`, `chunks`,
+`shard_shape` and `dimension_names` in Julia order). The second takes the complete array
+metadata (the `zarr.json` document, as a dictionary or JSON string, with Zarr (C) dimension
+order), for codecs or options the first form does not cover.
+
+Parent groups are not created implicitly; create them first with [`create_group`](@ref).
+
+# Example
+```julia
+session = writable_session(repo, "main")
+create_group(session; attributes = Dict("title" => "demo"))
+a = create_array(session, "temperature", Float32, 360, 180; chunks = (90, 90),
+                 dimension_names = ("lon", "lat"), attributes = Dict("units" => "K"))
+a[:, :] = rand(Float32, 360, 180)
+commit(session, "add temperature")
+```
+"""
+function create_array(session::Session, path::AbstractString, T::Type, dims::Int...;
+                      chunks::NTuple{N,Int} where N = Zarrs._default_chunks(dims),
+                      compressor::AbstractString="zstd", compressor_level::Int=3,
+                      fill_value=nothing,
+                      shard_shape::Union{Nothing,Tuple}=nothing,
+                      dimension_names::Union{Nothing,Tuple}=nothing,
+                      attributes::Union{Nothing,AbstractDict}=nothing)
+    N = length(dims)
+    length(chunks) == N || throw(DimensionMismatch("chunks must have $N dimensions"))
+    haskey(Zarrs.JULIA_TO_ZARR_DTYPE, T) || throw(ArgumentError("unsupported element type $T"))
+    json = Zarrs.build_v3_metadata(;
+        T, shape=NTuple{N,Int}(dims), chunks=NTuple{N,Int}(chunks), compressor, compressor_level,
+        fill_value,
+        shard_shape = shard_shape === nothing ? nothing : NTuple{N,Int}(shard_shape),
+        dimension_names = dimension_names === nothing ? nothing : NTuple{N,String}(String.(dimension_names)))
+    if attributes !== nothing
+        meta = JSON.parse(json)
+        meta["attributes"] = Dict{String,Any}(string(k) => v for (k, v) in attributes)
+        json = JSON.json(meta)
+    end
+    return create_array(session, path; metadata=json)
+end
+
+function create_array(session::Session, path::AbstractString;
+                      metadata::Union{AbstractString,AbstractDict})
+    p = _node_path(path)
+    json = metadata isa AbstractString ? String(metadata) : JSON.json(metadata)
+    storage = session.zarrs_storage
+    ptr = LibZarrs.zarrs_create_array_rw(storage.ptr, p, json)
+    LibZarrs.zarrs_destroy_array(ptr)   # reopen through the usual path to get T, N and chunks
+    return _open_array(storage, p, "icechunk")
+end
+
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
@@ -545,9 +745,11 @@ export S3Storage, GCSStorage, AzureStorage, LocalStorage, MemoryStorage,
        RefreshableCredentials, S3Credentials, GCSBearerToken, set_credentials_timeout,
        Repository, Session, StorageConfig,
        readonly_session, writable_session, list_branches, list_tags,
-       commit, has_uncommitted_changes, ancestry,
-       create_branch, delete_branch, create_tag, delete_tag,
+       commit, has_uncommitted_changes, ancestry, discard_changes, status,
+       snapshot_id, session_branch,
+       create_branch, delete_branch, reset_branch, create_tag, delete_tag,
        lookup_branch, lookup_tag,
+       create_group, create_array,
        zopen
 
 end # module Icechunk

@@ -52,6 +52,15 @@ void zarrsFreeString(char *s);
 
 char *zarrsVersion(void);
 
+/**
+ * Whether array metadata written from now on includes zarrs' `_zarrs` attribute (the zarrs
+ * version and a description of the codec pipeline). zarrs' default is on; Zarrs.jl turns it
+ * off when it loads, see `Zarrs.set_include_zarrs_metadata!`.
+ */
+ZarrsResult zarrsSetIncludeZarrsMetadata(int32_t include);
+
+ZarrsResult zarrsGetIncludeZarrsMetadata(int32_t *pInclude);
+
 ZarrsResult zarrsCreateStorageFilesystem(const char *path, StorageHandle **pStorage);
 
 ZarrsResult zarrsCreateStorageHTTP(const char *url, StorageHandle **pStorage);
@@ -386,6 +395,82 @@ ZarrsResult zarrsIcechunkSessionCommitWithMetadata(IcSessionHandle *session,
  * `{"id", "parent_id", "written_at", "message", "metadata"}` (`written_at` is RFC 3339, UTC).
  */
 ZarrsResult zarrsIcechunkRepoAncestry(IcRepoHandle *repo, const char *branch, char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Create a readonly session on the last snapshot of `branch` written at or before `at`
+ * (an RFC 3339 timestamp).
+ */
+ZarrsResult zarrsIcechunkReadonlySessionAsOf(IcRepoHandle *repo,
+                                             const char *branch,
+                                             const char *at,
+                                             IcSessionHandle **pSession);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The snapshot a session is based on (its branch tip when it was opened, or the snapshot it
+ * reads).
+ */
+ZarrsResult zarrsIcechunkSessionSnapshotId(IcSessionHandle *session, char **pSnapshotId);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The branch of a session, or an empty string for a session that is not on a branch.
+ */
+ZarrsResult zarrsIcechunkSessionBranch(IcSessionHandle *session, char **pBranch);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Drop all uncommitted changes of a writable session.
+ */
+ZarrsResult zarrsIcechunkSessionDiscardChanges(IcSessionHandle *session);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Commit with options: `metadata_json` (a JSON object, or null), `amend` (replace the branch
+ * tip instead of adding a snapshot on top of it) and `allow_empty` (commit even without
+ * changes). Returns the new snapshot ID.
+ */
+ZarrsResult zarrsIcechunkSessionCommitWithOptions(IcSessionHandle *session,
+                                                  const char *message,
+                                                  const char *metadata_json,
+                                                  int32_t amend,
+                                                  int32_t allow_empty,
+                                                  char **pSnapshotId);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The uncommitted changes of a session, as a JSON diff object.
+ */
+ZarrsResult zarrsIcechunkSessionStatus(IcSessionHandle *session, char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The changes between two versions (`from` excluded, `to` included), as a JSON diff object.
+ * `*_kind`: 0 = branch tip, 1 = tag, 2 = snapshot ID.
+ */
+ZarrsResult zarrsIcechunkRepoDiff(IcRepoHandle *repo,
+                                  int32_t from_kind,
+                                  const char *from_value,
+                                  int32_t to_kind,
+                                  const char *to_value,
+                                  char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Point `branch` at `snapshot_id` (any snapshot, not only an ancestor).
+ */
+ZarrsResult zarrsIcechunkRepoResetBranch(IcRepoHandle *repo,
+                                         const char *branch,
+                                         const char *snapshot_id);
 #endif
 
 #if defined(ZARRS_ICECHUNK)

@@ -27,6 +27,13 @@ get_attributes
 set_attributes!
 ```
 
+## Configuration
+
+```@docs
+set_include_zarrs_metadata!
+include_zarrs_metadata
+```
+
 ## Resize
 
 ```@docs
@@ -58,6 +65,15 @@ Zarrs.Icechunk.Repository
 Zarrs.Icechunk.Session
 Zarrs.Icechunk.readonly_session
 Zarrs.Icechunk.writable_session
+Zarrs.Icechunk.snapshot_id
+Zarrs.Icechunk.session_branch
+```
+
+### Groups & Arrays in a Session
+
+```@docs
+Zarrs.Icechunk.create_group
+Zarrs.Icechunk.create_array
 ```
 
 ### Commit & Changes
@@ -65,7 +81,10 @@ Zarrs.Icechunk.writable_session
 ```@docs
 Zarrs.Icechunk.commit
 Zarrs.Icechunk.has_uncommitted_changes
+Zarrs.Icechunk.discard_changes
+Zarrs.Icechunk.status
 Zarrs.Icechunk.ancestry
+Base.diff(::Zarrs.Icechunk.Repository)
 ```
 
 ### Branch & Tag Management
@@ -75,6 +94,7 @@ Zarrs.Icechunk.list_branches
 Zarrs.Icechunk.list_tags
 Zarrs.Icechunk.create_branch
 Zarrs.Icechunk.delete_branch
+Zarrs.Icechunk.reset_branch
 Zarrs.Icechunk.create_tag
 Zarrs.Icechunk.delete_tag
 Zarrs.Icechunk.lookup_branch
