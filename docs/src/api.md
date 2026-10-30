@@ -76,6 +76,22 @@ Zarrs.Icechunk.create_group
 Zarrs.Icechunk.create_array
 ```
 
+### Configuration & Virtual Chunks
+
+```@docs
+Zarrs.Icechunk.RepositoryConfig
+Zarrs.Icechunk.VirtualChunkContainer
+Zarrs.Icechunk.ObjectStoreConfig
+Zarrs.Icechunk.s3_store
+Zarrs.Icechunk.gcs_store
+Zarrs.Icechunk.http_store
+Zarrs.Icechunk.local_filesystem_store
+Zarrs.Icechunk.repository_config
+Zarrs.Icechunk.save_config
+Zarrs.Icechunk.set_virtual_ref
+Zarrs.Icechunk.virtual_chunk_locations
+```
+
 ### Commit & Changes
 
 ```@docs

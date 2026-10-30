@@ -44,5 +44,6 @@ requested = ARGS
         include("test_icechunk.jl")
         include("test_icechunk_credentials.jl")
         include("test_icechunk_session_api.jl")
+        include("test_icechunk_virtual.jl")
     end
 end

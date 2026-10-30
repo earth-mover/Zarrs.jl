@@ -475,6 +475,65 @@ ZarrsResult zarrsIcechunkRepoResetBranch(IcRepoHandle *repo,
 
 #if defined(ZARRS_ICECHUNK)
 /**
+ * Open (`mode` 0), create (1) or open-or-create (2) a repository with a configuration and
+ * virtual chunk credentials.
+ *
+ * `config_json`: an icechunk `RepositoryConfig` as JSON (its serde form, e.g.
+ * `{"inline_chunk_threshold_bytes": 512, "virtual_chunk_containers": {...}}`), or null. On
+ * open, it is merged over the configuration stored in the repository.
+ * `credentials_json`: a JSON object mapping virtual chunk container URL prefixes to icechunk
+ * `Credentials` (serde form) or `null`, or null for none. Containers not listed cannot be read.
+ */
+ZarrsResult zarrsIcechunkRepoOpenWithConfig(IcStorageHandle *ic_storage,
+                                            int32_t mode,
+                                            const char *config_json,
+                                            const char *credentials_json,
+                                            IcRepoHandle **pRepo);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The repository's configuration (stored configuration merged with the one it was opened
+ * with) as JSON.
+ */
+ZarrsResult zarrsIcechunkRepoConfig(IcRepoHandle *repo, char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Persist the repository's current configuration (e.g. its virtual chunk containers) in the
+ * repository, so later opens use it.
+ */
+ZarrsResult zarrsIcechunkRepoSaveConfig(IcRepoHandle *repo);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Point the chunk at store key `key` (e.g. `"array/c/0/1"`) to `length` bytes at `offset` in
+ * the object at `location` (a URL inside a virtual chunk container). `etag` (or null) and
+ * `last_modified` (seconds since the epoch, or 0) guard against the object changing: reads
+ * fail if it no longer matches. With `validate_container` set, the location must belong to a
+ * container declared in the repository configuration.
+ */
+ZarrsResult zarrsIcechunkSessionSetVirtualRef(IcSessionHandle *session,
+                                              const char *key,
+                                              const char *location,
+                                              uint64_t offset,
+                                              uint64_t length,
+                                              const char *etag,
+                                              uint32_t last_modified,
+                                              int32_t validate_container);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * All virtual chunk locations referenced by the session's snapshot, as a JSON array of URLs.
+ */
+ZarrsResult zarrsIcechunkSessionVirtualChunkLocations(IcSessionHandle *session, char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
  * Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the
  * Julia credential service. Passing the function pointer avoids linking against libuv.
  */

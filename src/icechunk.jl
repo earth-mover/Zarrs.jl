@@ -269,6 +269,8 @@ function _create_ic_storage(::MemoryStorage)
     return StorageHandle(ptr)
 end
 
+include("icechunk_config.jl")
+
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
@@ -283,29 +285,55 @@ An Icechunk repository handle. Create with `Repository(storage; mode=:open)`.
 - `:create` — create a new repository
 - `:open_or_create` — open if exists, otherwise create
 
+# Keyword arguments
+- `config`: a [`RepositoryConfig`](@ref) (virtual chunk containers, inline threshold, ...).
+- `authorize_virtual_chunk_access`: credentials per virtual chunk container URL prefix; only
+  listed containers can be read. Values: an [`S3Credentials`](@ref) (static keys),
+  `:anonymous` or `:from_env` (S3 and GCS containers), or `nothing` (`file://` and
+  `http(s)://` containers, which need none).
+
 # Examples
 ```julia
 using Zarrs.Icechunk
 storage = S3Storage(bucket="my-bucket", prefix="my-repo", region="us-west-2")
 repo = Repository(storage)
 repo = Repository(storage; mode=:create)
+
+# Virtual chunks stored in public NetCDF files on S3
+config = RepositoryConfig(virtual_chunk_containers = [
+    VirtualChunkContainer("s3://noaa-data/", s3_store(region = "us-east-1"))])
+repo = Repository(storage; config,
+                  authorize_virtual_chunk_access = Dict("s3://noaa-data/" => :anonymous))
 ```
 """
 struct Repository
     handle::RepoHandle
 end
 
-function Repository(storage::StorageConfig; mode::Symbol=:open)
+function Repository(storage::StorageConfig; mode::Symbol=:open,
+                    config::Union{Nothing,RepositoryConfig}=nothing,
+                    authorize_virtual_chunk_access::AbstractDict=Dict{String,Any}())
     ic_storage = _create_ic_storage(storage)
-    repo_ptr = if mode === :open
-        LibZarrs.zarrs_icechunk_repo_open(ic_storage.ptr)
-    elseif mode === :create
-        LibZarrs.zarrs_icechunk_repo_create(ic_storage.ptr)
-    elseif mode === :open_or_create
-        LibZarrs.zarrs_icechunk_repo_open_or_create(ic_storage.ptr)
-    else
-        error("Invalid mode: $mode. Use :open, :create, or :open_or_create")
+    if config === nothing && isempty(authorize_virtual_chunk_access)
+        repo_ptr = if mode === :open
+            LibZarrs.zarrs_icechunk_repo_open(ic_storage.ptr)
+        elseif mode === :create
+            LibZarrs.zarrs_icechunk_repo_create(ic_storage.ptr)
+        elseif mode === :open_or_create
+            LibZarrs.zarrs_icechunk_repo_open_or_create(ic_storage.ptr)
+        else
+            error("Invalid mode: $mode. Use :open, :create, or :open_or_create")
+        end
+        return Repository(RepoHandle(repo_ptr, ic_storage))
     end
+    mode_int = mode === :open ? Cint(0) : mode === :create ? Cint(1) :
+               mode === :open_or_create ? Cint(2) :
+               error("Invalid mode: $mode. Use :open, :create, or :open_or_create")
+    config_json = config === nothing ? C_NULL : JSON.json(_config_dict(config))
+    creds_json = isempty(authorize_virtual_chunk_access) ? C_NULL :
+                 JSON.json(Dict(String(k) => _credentials_dict(String(k), v)
+                                for (k, v) in authorize_virtual_chunk_access))
+    repo_ptr = LibZarrs.zarrs_icechunk_repo_open_with_config(ic_storage.ptr, mode_int, config_json, creds_json)
     return Repository(RepoHandle(repo_ptr, ic_storage))
 end
 
@@ -737,6 +765,8 @@ function create_array(session::Session, path::AbstractString;
     return _open_array(storage, p, "icechunk")
 end
 
+include("icechunk_virtual.jl")
+
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
@@ -750,6 +780,9 @@ export S3Storage, GCSStorage, AzureStorage, LocalStorage, MemoryStorage,
        create_branch, delete_branch, reset_branch, create_tag, delete_tag,
        lookup_branch, lookup_tag,
        create_group, create_array,
+       RepositoryConfig, VirtualChunkContainer, ObjectStoreConfig,
+       s3_store, gcs_store, http_store, local_filesystem_store,
+       repository_config, save_config, set_virtual_ref, virtual_chunk_locations,
        zopen
 
 end # module Icechunk
