@@ -39,7 +39,9 @@ using Zarrs.Icechunk
             mkpath(dirname(datafile))
             values = collect(1.0:12.0)
             write(datafile, htol.(values))
-            prefix = "file://" * joinpath(dir, "data") * "/"
+            # file URL of the directory (file:///C:/... on Windows)
+            prefix = (Sys.iswindows() ? "file:///" * replace(joinpath(dir, "data"), '\\' => '/') :
+                      "file://" * joinpath(dir, "data")) * "/"
 
             config = RepositoryConfig(virtual_chunk_containers=[
                 VirtualChunkContainer(prefix, local_filesystem_store(joinpath(dir, "data")))])
