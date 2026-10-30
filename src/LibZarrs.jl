@@ -218,6 +218,46 @@ function zarrs_version()
 end
 
 """
+    zarrs_set_include_zarrs_metadata(include)
+
+Whether array metadata written from now on includes zarrs' `_zarrs` attribute (the zarrs version and a description of the codec pipeline). zarrs' default is on; Zarrs.jl turns it off when it loads, see `Zarrs.set\\_include\\_zarrs\\_metadata!`.
+
+### Prototype
+```c
+ZarrsResult zarrsSetIncludeZarrsMetadata(int32_t include);
+```
+"""
+function zarrs_set_include_zarrs_metadata(include)
+    _result = @zarrs_ccall(
+        (:zarrsSetIncludeZarrsMetadata, libzarrs_jl),
+        ZarrsResult,
+        (Int32,),
+        include
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_get_include_zarrs_metadata()
+
+### Prototype
+```c
+ZarrsResult zarrsGetIncludeZarrsMetadata(int32_t *pInclude);
+```
+"""
+function zarrs_get_include_zarrs_metadata()
+    _out_ref = Ref{Int32}(zero(Int32))
+    _result = @zarrs_ccall(
+        (:zarrsGetIncludeZarrsMetadata, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{Int32},),
+        _out_ref
+    )
+    check_error(_result)
+    return _out_ref[]
+end
+
+"""
     zarrs_create_storage_filesystem(path)
 
 ### Prototype
@@ -1747,6 +1787,227 @@ function zarrs_icechunk_repo_ancestry(repo, branch)
     _s = unsafe_string(_str_ptr[])
     ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
     return _s
+end
+
+"""
+    zarrs_icechunk_readonly_session_as_of(repo, branch, at)
+
+Create a readonly session on the last snapshot of `branch` written at or before `at` (an RFC 3339 timestamp).
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkReadonlySessionAsOf(IcRepoHandle *repo, const char *branch, const char *at, IcSessionHandle **pSession);
+```
+"""
+function zarrs_icechunk_readonly_session_as_of(repo, branch, at)
+    _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkReadonlySessionAsOf, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle}, Cstring, Cstring, Ptr{Ptr{IcSessionHandle}}),
+        repo,
+        branch,
+        at,
+        _handle_ptr
+    )
+    check_error(_result)
+    return _handle_ptr[]
+end
+
+"""
+    zarrs_icechunk_session_snapshot_id(session)
+
+The snapshot a session is based on (its branch tip when it was opened, or the snapshot it reads).
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionSnapshotId(IcSessionHandle *session, char **pSnapshotId);
+```
+"""
+function zarrs_icechunk_session_snapshot_id(session)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionSnapshotId, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Ptr{Cstring}),
+        session,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_session_branch(session)
+
+The branch of a session, or an empty string for a session that is not on a branch.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionBranch(IcSessionHandle *session, char **pBranch);
+```
+"""
+function zarrs_icechunk_session_branch(session)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionBranch, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Ptr{Cstring}),
+        session,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_session_discard_changes(session)
+
+Drop all uncommitted changes of a writable session.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionDiscardChanges(IcSessionHandle *session);
+```
+"""
+function zarrs_icechunk_session_discard_changes(session)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionDiscardChanges, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle},),
+        session
+    )
+    check_error(_result)
+end
+
+"""
+    zarrs_icechunk_session_commit_with_options(session, message, metadata_json, amend, allow_empty)
+
+Commit with options: `metadata_json` (a JSON object, or null), `amend` (replace the branch tip instead of adding a snapshot on top of it) and `allow_empty` (commit even without changes). Returns the new snapshot ID.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionCommitWithOptions(IcSessionHandle *session, const char *message, const char *metadata_json, int32_t amend, int32_t allow_empty, char **pSnapshotId);
+```
+"""
+function zarrs_icechunk_session_commit_with_options(
+    session,
+    message,
+    metadata_json,
+    amend,
+    allow_empty,
+)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionCommitWithOptions, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Cstring, Cstring, Int32, Int32, Ptr{Cstring}),
+        session,
+        message,
+        metadata_json,
+        amend,
+        allow_empty,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_session_status(session)
+
+The uncommitted changes of a session, as a JSON diff object.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionStatus(IcSessionHandle *session, char **pJson);
+```
+"""
+function zarrs_icechunk_session_status(session)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionStatus, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Ptr{Cstring}),
+        session,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_repo_diff(repo, from_kind, from_value, to_kind, to_value)
+
+The changes between two versions (`from` excluded, `to` included), as a JSON diff object. `*\\_kind`: 0 = branch tip, 1 = tag, 2 = snapshot ID.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoDiff(IcRepoHandle *repo, int32_t from_kind, const char *from_value, int32_t to_kind, const char *to_value, char **pJson);
+```
+"""
+function zarrs_icechunk_repo_diff(repo, from_kind, from_value, to_kind, to_value)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoDiff, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle}, Int32, Cstring, Int32, Cstring, Ptr{Cstring}),
+        repo,
+        from_kind,
+        from_value,
+        to_kind,
+        to_value,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_repo_reset_branch(repo, branch, snapshot_id)
+
+Point `branch` at `snapshot_id` (any snapshot, not only an ancestor).
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoResetBranch(IcRepoHandle *repo, const char *branch, const char *snapshot_id);
+```
+"""
+function zarrs_icechunk_repo_reset_branch(repo, branch, snapshot_id)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoResetBranch, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle}, Cstring, Cstring),
+        repo,
+        branch,
+        snapshot_id
+    )
+    check_error(_result)
 end
 
 """

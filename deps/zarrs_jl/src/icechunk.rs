@@ -952,12 +952,13 @@ pub unsafe extern "C" fn zarrsIcechunkReadonlySession(
     let version = match version_type {
         0 => icechunk::repository::VersionInfo::BranchTipRef(version_str),
         1 => icechunk::repository::VersionInfo::TagRef(version_str),
-        2 => {
-            // SnapshotId doesn't implement FromStr; snapshot access via ID
-            // is not yet supported in the Julia bindings.
-            set_error("Snapshot ID access not yet supported; use branch or tag".to_string());
-            return ZarrsResult::ZARRS_ERROR_STORAGE;
-        }
+        2 => match parse_snapshot_id(&version_str) {
+            Ok(id) => icechunk::repository::VersionInfo::SnapshotId(id),
+            Err(msg) => {
+                set_error(msg);
+                return ZarrsResult::ZARRS_ERROR_STORAGE;
+            }
+        },
         _ => {
             set_error(format!("Invalid version_type: {version_type}"));
             return ZarrsResult::ZARRS_ERROR_STORAGE;
@@ -1256,6 +1257,291 @@ pub unsafe extern "C" fn zarrsIcechunkRepoAncestry(
             unsafe { *pJson = cstr.into_raw() };
             ZarrsResult::ZARRS_SUCCESS
         }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots, time travel, status, diff, branch reset
+// ---------------------------------------------------------------------------
+
+fn parse_snapshot_id(s: &str) -> Result<icechunk::format::SnapshotId, String> {
+    icechunk::format::SnapshotId::try_from(s).map_err(|e| format!("Invalid snapshot ID {s:?}: {e}"))
+}
+
+fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&chrono::Utc))
+        .map_err(|e| format!("Invalid timestamp {s:?} (expected RFC 3339): {e}"))
+}
+
+/// Store a string result in `*out`, or record the error.
+unsafe fn string_out(result: Result<String, String>, out: *mut *mut c_char) -> ZarrsResult {
+    match result.and_then(|s| CString::new(s).map_err(|e| e.to_string())) {
+        Ok(cstr) => {
+            unsafe { *out = cstr.into_raw() };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// Create a readonly session on the last snapshot of `branch` written at or before `at`
+/// (an RFC 3339 timestamp).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkReadonlySessionAsOf(
+    repo: *mut IcRepoHandle,
+    branch: *const c_char,
+    at: *const c_char,
+    pSession: *mut *mut IcSessionHandle,
+) -> ZarrsResult {
+    if repo.is_null() || pSession.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let branch_str = match str_from_ptr(branch) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let at = match str_from_ptr(at).map(parse_rfc3339) {
+        Ok(Ok(t)) => t,
+        Ok(Err(msg)) => {
+            set_error(msg);
+            return ZarrsResult::ZARRS_ERROR_STORAGE;
+        }
+        Err(r) => return r,
+    };
+    let version = icechunk::repository::VersionInfo::AsOf { branch: branch_str, at };
+    let rh = unsafe { &*repo };
+    let runtime = rh.runtime;
+    let result = runtime.block_on(async {
+        let session = rh
+            .repo
+            .readonly_session(&version)
+            .await
+            .map_err(|e| format!("readonly_session error: {e}"))?;
+        let session_arc = Arc::new(tokio::sync::RwLock::new(session));
+        let store = icechunk::Store::from_session(session_arc.clone()).await;
+        Ok::<_, String>((store, session_arc))
+    });
+    match result {
+        Ok((store, session_arc)) => {
+            let handle = Box::new(IcSessionHandle { store, session: session_arc, runtime });
+            unsafe { *pSession = Box::into_raw(handle) };
+            ZarrsResult::ZARRS_SUCCESS
+        }
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// The snapshot a session is based on (its branch tip when it was opened, or the snapshot it
+/// reads).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionSnapshotId(
+    session: *mut IcSessionHandle,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let sh = unsafe { &*session };
+    let id = sh.runtime.block_on(async { sh.session.read().await.snapshot_id().to_string() });
+    unsafe { string_out(Ok(id), pSnapshotId) }
+}
+
+/// The branch of a session, or an empty string for a session that is not on a branch.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionBranch(
+    session: *mut IcSessionHandle,
+    pBranch: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pBranch.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let sh = unsafe { &*session };
+    let branch =
+        sh.runtime.block_on(async { sh.session.read().await.branch().unwrap_or("").to_string() });
+    unsafe { string_out(Ok(branch), pBranch) }
+}
+
+/// Drop all uncommitted changes of a writable session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionDiscardChanges(
+    session: *mut IcSessionHandle,
+) -> ZarrsResult {
+    if session.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        sh.session.write().await.discard_changes().map_err(|e| format!("discard_changes error: {e}"))
+    });
+    match result {
+        Ok(()) => ZarrsResult::ZARRS_SUCCESS,
+        Err(msg) => {
+            set_error(msg);
+            ZarrsResult::ZARRS_ERROR_STORAGE
+        }
+    }
+}
+
+/// Commit with options: `metadata_json` (a JSON object, or null), `amend` (replace the branch
+/// tip instead of adding a snapshot on top of it) and `allow_empty` (commit even without
+/// changes). Returns the new snapshot ID.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionCommitWithOptions(
+    session: *mut IcSessionHandle,
+    message: *const c_char,
+    metadata_json: *const c_char,
+    amend: i32,
+    allow_empty: i32,
+    pSnapshotId: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pSnapshotId.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let msg_str = match str_from_ptr(message) {
+        Ok(s) => s.to_string(),
+        Err(r) => return r,
+    };
+    let properties: icechunk::format::snapshot::SnapshotProperties = match opt_string(metadata_json)
+    {
+        None => Default::default(),
+        Some(json) => match serde_json::from_str(&json) {
+            Ok(p) => p,
+            Err(e) => {
+                set_error(format!("commit metadata must be a JSON object: {e}"));
+                return ZarrsResult::ZARRS_ERROR_INVALID_METADATA;
+            }
+        },
+    };
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        let mut guard = sh.session.write().await;
+        let mut builder = guard.commit(msg_str.as_str()).properties(properties).allow_empty(allow_empty != 0);
+        if amend != 0 {
+            builder = builder.amend();
+        }
+        builder.execute().await.map(|id| id.to_string()).map_err(|e| format!("commit error: {e}"))
+    });
+    unsafe { string_out(result, pSnapshotId) }
+}
+
+fn diff_to_json(diff: &icechunk::diff::Diff) -> serde_json::Value {
+    let paths = |set: &std::collections::BTreeSet<icechunk::format::Path>| -> Vec<String> {
+        set.iter().map(|p| p.to_string()).collect()
+    };
+    let chunks: serde_json::Map<String, serde_json::Value> = diff
+        .updated_chunks
+        .iter()
+        .map(|(path, coords)| {
+            let coords: Vec<Vec<u32>> = coords.iter().map(|c| c.0.clone()).collect();
+            (path.to_string(), serde_json::json!(coords))
+        })
+        .collect();
+    let moved: Vec<serde_json::Value> = diff
+        .moved_nodes
+        .iter()
+        .map(|m| serde_json::json!({"from": m.from.to_string(), "to": m.to.to_string()}))
+        .collect();
+    serde_json::json!({
+        "new_groups": paths(&diff.new_groups),
+        "new_arrays": paths(&diff.new_arrays),
+        "deleted_groups": paths(&diff.deleted_groups),
+        "deleted_arrays": paths(&diff.deleted_arrays),
+        "updated_groups": paths(&diff.updated_groups),
+        "updated_arrays": paths(&diff.updated_arrays),
+        "updated_chunks": chunks,
+        "moved_nodes": moved,
+    })
+}
+
+/// The uncommitted changes of a session, as a JSON diff object.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkSessionStatus(
+    session: *mut IcSessionHandle,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if session.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let sh = unsafe { &*session };
+    let result = sh.runtime.block_on(async {
+        let diff = sh.session.read().await.status().await.map_err(|e| format!("status error: {e}"))?;
+        Ok(diff_to_json(&diff).to_string())
+    });
+    unsafe { string_out(result, pJson) }
+}
+
+/// A version selector: `kind` 0 = branch tip, 1 = tag, 2 = snapshot ID.
+fn version_from(kind: i32, value: String) -> Result<icechunk::repository::VersionInfo, String> {
+    use icechunk::repository::VersionInfo;
+    match kind {
+        0 => Ok(VersionInfo::BranchTipRef(value)),
+        1 => Ok(VersionInfo::TagRef(value)),
+        2 => parse_snapshot_id(&value).map(VersionInfo::SnapshotId),
+        _ => Err(format!("Invalid version kind: {kind}")),
+    }
+}
+
+/// The changes between two versions (`from` excluded, `to` included), as a JSON diff object.
+/// `*_kind`: 0 = branch tip, 1 = tag, 2 = snapshot ID.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoDiff(
+    repo: *mut IcRepoHandle,
+    from_kind: i32,
+    from_value: *const c_char,
+    to_kind: i32,
+    to_value: *const c_char,
+    pJson: *mut *mut c_char,
+) -> ZarrsResult {
+    if repo.is_null() || pJson.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let (from, to) = match (str_from_ptr(from_value), str_from_ptr(to_value)) {
+        (Ok(f), Ok(t)) => (version_from(from_kind, f.to_string()), version_from(to_kind, t.to_string())),
+        (Err(r), _) | (_, Err(r)) => return r,
+    };
+    let rh = unsafe { &*repo };
+    let result = from.and_then(|from| to.map(|to| (from, to))).and_then(|(from, to)| {
+        rh.runtime.block_on(async {
+            let diff = rh.repo.diff(&from, &to).await.map_err(|e| format!("diff error: {e}"))?;
+            Ok(diff_to_json(&diff).to_string())
+        })
+    });
+    unsafe { string_out(result, pJson) }
+}
+
+/// Point `branch` at `snapshot_id` (any snapshot, not only an ancestor).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsIcechunkRepoResetBranch(
+    repo: *mut IcRepoHandle,
+    branch: *const c_char,
+    snapshot_id: *const c_char,
+) -> ZarrsResult {
+    if repo.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let (branch_str, snap_str) = match (str_from_ptr(branch), str_from_ptr(snapshot_id)) {
+        (Ok(b), Ok(s)) => (b.to_string(), s.to_string()),
+        (Err(r), _) | (_, Err(r)) => return r,
+    };
+    let rh = unsafe { &*repo };
+    let result = parse_snapshot_id(&snap_str).and_then(|id| {
+        rh.runtime.block_on(async {
+            rh.repo.reset_branch(&branch_str, &id, None).await.map_err(|e| format!("reset_branch error: {e}"))
+        })
+    });
+    match result {
+        Ok(()) => ZarrsResult::ZARRS_SUCCESS,
         Err(msg) => {
             set_error(msg);
             ZarrsResult::ZARRS_ERROR_STORAGE

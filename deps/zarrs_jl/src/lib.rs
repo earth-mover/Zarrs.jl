@@ -73,6 +73,29 @@ pub extern "C" fn zarrsVersion() -> *mut c_char {
 }
 
 // ---------------------------------------------------------------------------
+// Global configuration
+// ---------------------------------------------------------------------------
+
+/// Whether array metadata written from now on includes zarrs' `_zarrs` attribute (the zarrs
+/// version and a description of the codec pipeline). zarrs' default is on; Zarrs.jl turns it
+/// off when it loads, see `Zarrs.set_include_zarrs_metadata!`.
+#[unsafe(no_mangle)]
+pub extern "C" fn zarrsSetIncludeZarrsMetadata(include: i32) -> ZarrsResult {
+    zarrs::config::global_config_mut().set_include_zarrs_metadata(include != 0);
+    ZarrsResult::ZARRS_SUCCESS
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zarrsGetIncludeZarrsMetadata(pInclude: *mut i32) -> ZarrsResult {
+    if pInclude.is_null() {
+        return ZarrsResult::ZARRS_ERROR_NULL_PTR;
+    }
+    let include = zarrs::config::global_config().include_zarrs_metadata();
+    unsafe { *pInclude = include as i32 };
+    ZarrsResult::ZARRS_SUCCESS
+}
+
+// ---------------------------------------------------------------------------
 // Storage — opaque handle wrapping an Arc<FilesystemStore>
 // ---------------------------------------------------------------------------
 
