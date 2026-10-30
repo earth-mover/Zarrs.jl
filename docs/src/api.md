@@ -65,6 +65,7 @@ Zarrs.Icechunk.writable_session
 ```@docs
 Zarrs.Icechunk.commit
 Zarrs.Icechunk.has_uncommitted_changes
+Zarrs.Icechunk.ancestry
 ```
 
 ### Branch & Tag Management

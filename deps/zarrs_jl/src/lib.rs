@@ -123,7 +123,27 @@ pub unsafe extern "C" fn zarrsCreateStorageFilesystem(
 // Storage — HTTP (read-only via object_store)
 // ---------------------------------------------------------------------------
 
-pub(crate) struct TokioBlockOn(pub(crate) tokio::runtime::Runtime);
+// ---------------------------------------------------------------------------
+// The shared Tokio runtime
+// ---------------------------------------------------------------------------
+
+/// Every handle in this library drives its futures on one process-wide multi-thread runtime,
+/// never one per call: connection pools, credential refresh tasks and timers created while
+/// opening a store must outlive the call that created them.
+pub(crate) type SharedRuntime = &'static tokio::runtime::Runtime;
+
+pub(crate) fn shared_runtime() -> SharedRuntime {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("zarrs-jl")
+            .build()
+            .expect("cannot start the zarrs_jl Tokio runtime")
+    })
+}
+
+pub(crate) struct TokioBlockOn(pub(crate) SharedRuntime);
 
 impl AsyncToSyncBlockOn for TokioBlockOn {
     fn block_on<F: core::future::Future>(&self, future: F) -> F::Output {
@@ -141,13 +161,7 @@ pub unsafe extern "C" fn zarrsCreateStorageHTTP(
         Err(r) => return r,
     };
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            set_error(format!("Failed to create tokio runtime: {e}"));
-            return ZarrsResult::ZARRS_ERROR_STORAGE;
-        }
-    };
+    let runtime = shared_runtime();
 
     let http_store = match http_store::SimpleHttpStore::new(url_str) {
         Ok(store) => store,
@@ -197,13 +211,7 @@ pub unsafe extern "C" fn zarrsCreateStorageS3(
         }
     };
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            set_error(format!("Failed to create tokio runtime: {e}"));
-            return ZarrsResult::ZARRS_ERROR_STORAGE;
-        }
-    };
+    let runtime = shared_runtime();
 
     let mut builder = object_store::aws::AmazonS3Builder::new()
         .with_bucket_name(bucket_str);
@@ -282,13 +290,7 @@ pub unsafe extern "C" fn zarrsCreateStorageGCS(
         }
     };
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
-            set_error(format!("Failed to create tokio runtime: {e}"));
-            return ZarrsResult::ZARRS_ERROR_STORAGE;
-        }
-    };
+    let runtime = shared_runtime();
 
     let mut builder = object_store::gcp::GoogleCloudStorageBuilder::new()
         .with_bucket_name(bucket_str);
@@ -1286,19 +1288,20 @@ mod icechunk_adapter_impl {
         StorageError::Other(e.to_string())
     }
 
+    /// A key that does not exist: a chunk never written ("chunk cannot be find ..."), or a
+    /// missing node. zarrs expects `None` for these (it then uses the fill value), not an error.
+    /// Matched on the error kind; the message text differs between kinds and versions.
+    fn is_not_found(e: &::icechunk::store::StoreError) -> bool {
+        matches!(e.kind(), ::icechunk::store::StoreErrorKind::NotFound(_))
+    }
+
     #[async_trait::async_trait]
     impl zarrs_storage::AsyncReadableStorageTraits for IcechunkAdapter {
         async fn get(&self, key: &StoreKey) -> Result<MaybeBytes, StorageError> {
             match self.store.get(key.as_str(), &::icechunk::format::ByteRange::ALL).await {
                 Ok(bytes) => Ok(Some(Bytes::from(bytes.to_vec()))),
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("not found") || msg.contains("NotFound") {
-                        Ok(None)
-                    } else {
-                        Err(ic_err(e))
-                    }
-                }
+                Err(e) if is_not_found(&e) => Ok(None),
+                Err(e) => Err(ic_err(e)),
             }
         }
 
@@ -1313,13 +1316,8 @@ mod icechunk_adapter_impl {
                 let ic_range = to_icechunk_byte_range(range);
                 match self.store.get(key.as_str(), &ic_range).await {
                     Ok(bytes) => results.push(Ok(Bytes::from(bytes.to_vec()))),
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("not found") || msg.contains("NotFound") {
-                            return Ok(None);
-                        }
-                        return Err(ic_err(e));
-                    }
+                    Err(e) if is_not_found(&e) => return Ok(None),
+                    Err(e) => return Err(ic_err(e)),
                 }
             }
             let iter = futures::stream::iter(results);

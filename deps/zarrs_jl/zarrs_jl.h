@@ -371,6 +371,25 @@ ZarrsResult zarrsIcechunkSessionHasChanges(IcSessionHandle *session, int32_t *pH
 
 #if defined(ZARRS_ICECHUNK)
 /**
+ * Commit a writable session with a message and snapshot metadata (`metadata_json`, a JSON
+ * object, or null for none), returning the snapshot ID string.
+ */
+ZarrsResult zarrsIcechunkSessionCommitWithMetadata(IcSessionHandle *session,
+                                                   const char *message,
+                                                   const char *metadata_json,
+                                                   char **pSnapshotId);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * The ancestry of a branch, newest first, as a JSON array of
+ * `{"id", "parent_id", "written_at", "message", "metadata"}` (`written_at` is RFC 3339, UTC).
+ */
+ZarrsResult zarrsIcechunkRepoAncestry(IcRepoHandle *repo, const char *branch, char **pJson);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
  * Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the
  * Julia credential service. Passing the function pointer avoids linking against libuv.
  */

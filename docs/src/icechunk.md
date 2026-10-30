@@ -188,7 +188,15 @@ session = readonly_session(repo; tag="v1.0")
 session = writable_session(repo, "main")
 # ... modify data ...
 has_uncommitted_changes(session)  # true
-commit(session, "changes")
+commit(session, "changes"; metadata = Dict("author" => "me"))   # metadata is optional
+```
+
+### History
+
+```julia
+for c in ancestry(repo; branch = "main")   # newest first
+    println(c.id, "  ", c.written_at, "  ", c.message, "  ", c.metadata)
+end
 ```
 
 ## Branch & Tag Management

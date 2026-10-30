@@ -121,6 +121,41 @@ end
         @test !("v1.0" in tags)
     end
 
+    @testset "Missing chunks read as the fill value" begin
+        # Icechunk reports a never-written chunk as a "not found" error kind; the store adapter
+        # must turn it into a missing key (fill value), also for partial writes into a new chunk.
+        repo = Repository(MemoryStorage(); mode=:create)
+        session = writable_session(repo, "main")
+        _create_root_group(session)
+        arr = _create_array(session, "/sparse", Float32, (4, 4), (2, 2))
+        arr[1:2, 1:2] = Float32[1 2; 3 4]          # one chunk; the other three stay unwritten
+        arr[4, 4] = 9f0                            # partial write into a new chunk
+        commit(session, "sparse")
+        a = zopen(readonly_session(repo; branch="main"))["sparse"]
+        @test a[1:2, 1:2] == Float32[1 2; 3 4]
+        @test a[3, 1] == 0f0 && a[1, 3] == 0f0    # never written: fill value
+        @test a[3:4, 3:4] == Float32[0 0; 0 9]
+    end
+
+    @testset "Commit metadata and ancestry" begin
+        repo = Repository(MemoryStorage(); mode=:create)
+        session = writable_session(repo, "main")
+        _create_root_group(session)
+        snap1 = commit(session, "first"; metadata=Dict("writer" => "julia", "n" => 1))
+        session = writable_session(repo, "main")
+        _create_array(session, "/x", Int32, (2,), (2,))[:] = Int32[1, 2]
+        snap2 = commit(session, "second"; metadata=(step = 2,))
+        history = ancestry(repo; branch="main")
+        @test [h.message for h in history][1:2] == ["second", "first"]
+        @test history[1].id == snap2 && history[2].id == snap1
+        @test history[1].parent_id == snap1
+        @test history[1].metadata == Dict("step" => 2)
+        @test history[2].metadata == Dict("writer" => "julia", "n" => 1)
+        @test history[1].written_at isa Zarrs.Icechunk.Dates.DateTime
+        @test history[end].parent_id === nothing   # the repository's initial snapshot
+        @test_throws ErrorException commit(writable_session(repo, "main"), "bad"; metadata="not a dict")
+    end
+
     @testset "Session GC safety" begin
         storage = MemoryStorage()
         repo = Repository(storage; mode=:create)

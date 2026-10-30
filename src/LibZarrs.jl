@@ -1691,6 +1691,65 @@ function zarrs_icechunk_session_has_changes(session)
 end
 
 """
+    zarrs_icechunk_session_commit_with_metadata(session, message, metadata_json)
+
+Commit a writable session with a message and snapshot metadata (`metadata_json`, a JSON object, or null for none), returning the snapshot ID string.
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkSessionCommitWithMetadata(IcSessionHandle *session, const char *message, const char *metadata_json, char **pSnapshotId);
+```
+"""
+function zarrs_icechunk_session_commit_with_metadata(session, message, metadata_json)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkSessionCommitWithMetadata, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcSessionHandle}, Cstring, Cstring, Ptr{Cstring}),
+        session,
+        message,
+        metadata_json,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
+    zarrs_icechunk_repo_ancestry(repo, branch)
+
+The ancestry of a branch, newest first, as a JSON array of `{"id", "parent\\_id", "written\\_at", "message", "metadata"}` (`written_at` is RFC 3339, UTC).
+
+### Prototype
+```c
+ZarrsResult zarrsIcechunkRepoAncestry(IcRepoHandle *repo, const char *branch, char **pJson);
+```
+"""
+function zarrs_icechunk_repo_ancestry(repo, branch)
+    _str_ptr = Ref{Cstring}(C_NULL)
+    _result = @zarrs_ccall(
+        (:zarrsIcechunkRepoAncestry, libzarrs_jl),
+        ZarrsResult,
+        (Ptr{IcRepoHandle}, Cstring, Ptr{Cstring}),
+        repo,
+        branch,
+        _str_ptr
+    )
+    check_error(_result)
+    if _str_ptr[] == C_NULL
+        return nothing
+    end
+    _s = unsafe_string(_str_ptr[])
+    ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Cstring,), _str_ptr[])
+    return _s
+end
+
+"""
     zarrs_credentials_set_notifier(handle, uv_async_send)
 
 Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the Julia credential service. Passing the function pointer avoids linking against libuv.

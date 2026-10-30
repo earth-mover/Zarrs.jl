@@ -461,12 +461,44 @@ function writable_session(repo::Repository, branch::AbstractString="main")
 end
 
 """
-    commit(session::Session, message::AbstractString) -> String
+    commit(session::Session, message::AbstractString; metadata=nothing) -> String
 
-Commit changes in a writable session. Returns the snapshot ID string.
+Commit changes in a writable session. Returns the snapshot ID string. `metadata` is an optional
+dictionary (or named tuple) of JSON-compatible values stored with the snapshot; see
+[`ancestry`](@ref).
 """
-function commit(session::Session, message::AbstractString)
-    return LibZarrs.zarrs_icechunk_session_commit(session.handle.ptr, String(message))
+function commit(session::Session, message::AbstractString; metadata=nothing)
+    metadata === nothing &&
+        return LibZarrs.zarrs_icechunk_session_commit(session.handle.ptr, String(message))
+    meta = metadata isa NamedTuple ? Dict(string(k) => v for (k, v) in pairs(metadata)) : metadata
+    return LibZarrs.zarrs_icechunk_session_commit_with_metadata(
+        session.handle.ptr, String(message), JSON.json(meta))
+end
+
+"""
+    ancestry(repo::Repository; branch="main") -> Vector{NamedTuple}
+
+The commits on `branch`, newest first: one named tuple per snapshot with fields `id`,
+`parent_id` (`nothing` for the first), `written_at` (a UTC `DateTime`), `message` and
+`metadata` (a dictionary).
+"""
+function ancestry(repo::Repository; branch::AbstractString="main")
+    json = LibZarrs.zarrs_icechunk_repo_ancestry(repo.handle.ptr, String(branch))
+    return [(id = String(x["id"]),
+             parent_id = x["parent_id"] === nothing ? nothing : String(x["parent_id"]),
+             written_at = _parse_rfc3339(x["written_at"]),
+             message = String(x["message"]),
+             metadata = Dict{String,Any}(x["metadata"]))
+            for x in JSON.parse(json)]
+end
+
+# "2026-10-30T12:34:56.123456789+00:00" -> DateTime (UTC, millisecond precision)
+function _parse_rfc3339(s::AbstractString)
+    m = match(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?", s)
+    m === nothing && return nothing
+    t = Dates.DateTime(m[1], Dates.dateformat"yyyy-mm-ddTHH:MM:SS")
+    frac = m[2] === nothing ? 0 : round(Int, parse(Float64, "0" * m[2]) * 1000)
+    return t + Dates.Millisecond(min(frac, 999))
 end
 
 """
@@ -513,7 +545,7 @@ export S3Storage, GCSStorage, AzureStorage, LocalStorage, MemoryStorage,
        RefreshableCredentials, S3Credentials, GCSBearerToken, set_credentials_timeout,
        Repository, Session, StorageConfig,
        readonly_session, writable_session, list_branches, list_tags,
-       commit, has_uncommitted_changes,
+       commit, has_uncommitted_changes, ancestry,
        create_branch, delete_branch, create_tag, delete_tag,
        lookup_branch, lookup_tag,
        zopen
