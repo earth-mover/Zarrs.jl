@@ -24,16 +24,16 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           version: ${{ matrix.julia-version }}
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
+      - uses: julia-actions/cache@v3.5.0
 
       # Install Rust toolchain for building the companion crate
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@stable
 
       # Build the Rust cdylib (with icechunk feature, enabled by default)
       - name: Build libzarrs_jl
@@ -41,20 +41,20 @@ jobs:
 
       # Run core tests
       - name: Run tests
-        uses: julia-actions/julia-runtest@6e050c8013b833b1195105ff2fce9cd802f53271 # v1
+        uses: julia-actions/julia-runtest@v1.12.0
 
   test-icechunk:
     name: Icechunk tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           version: "1"
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: julia-actions/cache@v3.5.0
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build libzarrs_jl
         run: julia --project deps/build.jl
@@ -70,14 +70,14 @@ jobs:
     name: Tests without icechunk feature
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           version: "1"
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: julia-actions/cache@v3.5.0
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build libzarrs_jl without icechunk
         run: |
@@ -94,17 +94,17 @@ jobs:
     name: Cross-language compatibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           version: "1"
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: julia-actions/cache@v3.5.0
+      - uses: dtolnay/rust-toolchain@stable
 
       # Install uv for Python fixture generation
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@v10.3.1
 
       - name: Build libzarrs_jl
         run: julia --project deps/build.jl
@@ -135,14 +135,14 @@ jobs:
       contents: write
       statuses: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           version: "1"
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: julia-actions/cache@v3.5.0
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build libzarrs_jl
         run: julia --project deps/build.jl
@@ -163,16 +163,16 @@ jobs:
     name: Generated bindings up to date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
 
-      - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
+      - uses: julia-actions/setup-julia@v3.0.3
         with:
           # Pinned (with gen/Manifest.toml) so regenerating is reproducible:
           # Clang.jl's libclang comes from the Julia version's libLLVM_jll.
           version: "1.13"
 
-      - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: julia-actions/cache@v3.5.0
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install cbindgen
         run: cargo install cbindgen --version "$(cat gen/cbindgen-version)" --locked
