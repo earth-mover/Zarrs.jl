@@ -5,7 +5,7 @@ version: 'v0.0.3'
 workflows:
     '.github/workflows/ci.yml':
         - 'actions/checkout@v7.0.1'
-        - 'astral-sh/setup-uv@v10.3.1'
+        - 'astral-sh/setup-uv@v10.3.3'
         - 'dtolnay/rust-toolchain@stable'
         - 'julia-actions/cache@v3.5.0'
         - 'julia-actions/julia-runtest@v1.12.0'
@@ -16,9 +16,9 @@ dependencies:
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'astral-sh/setup-uv@v10.3.1':
-        ref: 'v10.3.1'
-        commit: 'sha1-18d369b23da25a81e9458561248e1aafff6a70fa'
+    'astral-sh/setup-uv@v10.3.3':
+        ref: 'v10.3.3'
+        commit: 'sha1-68559e99cc807c1eb7e9238fd43a15bba460eec2'
         owner_id: 115962839
         repo_id: 846733598
     'dtolnay/rust-toolchain@stable':
