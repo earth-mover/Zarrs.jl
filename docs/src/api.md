@@ -45,6 +45,10 @@ Zarrs.Icechunk.GCSStorage
 Zarrs.Icechunk.AzureStorage
 Zarrs.Icechunk.LocalStorage
 Zarrs.Icechunk.MemoryStorage
+Zarrs.Icechunk.RefreshableCredentials
+Zarrs.Icechunk.S3Credentials
+Zarrs.Icechunk.GCSBearerToken
+Zarrs.Icechunk.set_credentials_timeout
 ```
 
 ### Repository & Session

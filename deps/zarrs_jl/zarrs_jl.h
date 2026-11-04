@@ -212,6 +212,33 @@ ZarrsResult zarrsIcechunkGcsStorage(const char *bucket,
 #endif
 
 #if defined(ZARRS_ICECHUNK)
+/**
+ * S3 storage whose credentials come from a Julia function (refreshed by icechunk before they
+ * expire). `callback_id` identifies the function in Zarrs.jl's credential registry; see
+ * `credentials.rs` for how the function is called without running Julia on Tokio threads.
+ */
+ZarrsResult zarrsIcechunkS3StorageRefreshable(const char *bucket,
+                                              const char *prefix,
+                                              const char *region,
+                                              const char *endpoint_url,
+                                              int32_t allow_http,
+                                              int32_t force_path_style,
+                                              uint64_t callback_id,
+                                              IcStorageHandle **pHandle);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * GCS storage whose bearer token comes from a Julia function (see
+ * `zarrsIcechunkS3StorageRefreshable`).
+ */
+ZarrsResult zarrsIcechunkGcsStorageRefreshable(const char *bucket,
+                                               const char *prefix,
+                                               uint64_t callback_id,
+                                               IcStorageHandle **pHandle);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
 ZarrsResult zarrsIcechunkAzureStorage(const char *account,
                                       const char *container,
                                       const char *prefix,
@@ -340,6 +367,55 @@ ZarrsResult zarrsIcechunkSessionCommit(IcSessionHandle *session,
  * Check if a session has uncommitted changes.
  */
 ZarrsResult zarrsIcechunkSessionHasChanges(IcSessionHandle *session, int32_t *pHasChanges);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Register the `uv_async_t` (from `Base.AsyncCondition`) and `uv_async_send` used to wake the
+ * Julia credential service. Passing the function pointer avoids linking against libuv.
+ */
+ZarrsResult zarrsCredentialsSetNotifier(void *handle, void *uv_async_send);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Seconds a fetcher waits for Julia before failing (default 120).
+ */
+ZarrsResult zarrsCredentialsSetTimeout(uint64_t seconds);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Take one pending request into the outputs; request id 0 means the queue was empty.
+ */
+ZarrsResult zarrsCredentialsTakeRequest(uint64_t *pRequestId, uint64_t *pCallbackId);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Answer an S3 request. `expires_after` is seconds since the Unix epoch (NaN or <= 0: never).
+ */
+ZarrsResult zarrsCredentialsProvideS3(uint64_t request_id,
+                                      const char *access_key_id,
+                                      const char *secret_access_key,
+                                      const char *session_token,
+                                      double expires_after);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Answer a GCS request with a bearer token. `expires_after` as for `zarrsCredentialsProvideS3`.
+ */
+ZarrsResult zarrsCredentialsProvideGcs(uint64_t request_id,
+                                       const char *bearer,
+                                       double expires_after);
+#endif
+
+#if defined(ZARRS_ICECHUNK)
+/**
+ * Answer a request with an error (for example, the Julia function threw).
+ */
+ZarrsResult zarrsCredentialsProvideError(uint64_t request_id, const char *message);
 #endif
 
 #endif  /* ZARRS_JL_H */

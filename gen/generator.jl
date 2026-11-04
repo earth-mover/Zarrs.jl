@@ -83,6 +83,23 @@ const NO_ERROR_CHECK = Set([
     :zarrsVersion,
 ])
 
+# Functions that always use a plain `ccall`, never an off-thread call (see `@zarrs_ccall`):
+# fast, never block on I/O, or may run inside finalizers (which must not yield).
+function plain_ccall(c_sym::Symbol)
+    name = String(c_sym)
+    return c_sym in NO_ERROR_CHECK || startswith(name, "zarrsCredentials") ||
+           occursin("Destroy", name) || occursin("Free", name)
+end
+
+"""
+The call expression for a wrapper: `ccall(...)`, or `@zarrs_ccall(...)` for functions that may
+block on I/O (and therefore on refreshable credentials served by a Julia task).
+"""
+function call_expr(c_sym, fname, rettype, argtypes, argvalues)
+    plain_ccall(c_sym) && return :(ccall($fname, $rettype, $argtypes, $(argvalues...)))
+    return Expr(:macrocall, Symbol("@zarrs_ccall"), LineNumberNode(0), fname, rettype, argtypes, argvalues...)
+end
+
 # Functions whose last char** parameter is an output string that must be freed.
 # Detected automatically: if last param is Ptr{Ptr{Cchar}} or Ptr{Ptr{UInt8}},
 # it's a string output parameter.
@@ -186,7 +203,7 @@ function rewriter(x::Expr)
         # char** output → allocate Ref{Cstring}, extract string, free
         input_fargs = fargs[1:end-1]
         input_avals = avals[1:end-1]
-        cc = :(ccall($fname, $rettype, ($(atypes...),), $(input_avals...), _str_ptr))
+        cc = call_expr(c_sym, fname, rettype, :(($(atypes...),)), [input_avals..., :_str_ptr])
         return :(function $jl_name($(input_fargs...))
             _str_ptr = Ref{Cstring}(C_NULL)
             _result = $cc
@@ -202,7 +219,7 @@ function rewriter(x::Expr)
         # Ptr{Ptr{X}} output → allocate Ref, return opaque pointer
         input_fargs = fargs[1:end-1]
         input_avals = avals[1:end-1]
-        cc = :(ccall($fname, $rettype, ($(atypes...),), $(input_avals...), _handle_ptr))
+        cc = call_expr(c_sym, fname, rettype, :(($(atypes...),)), [input_avals..., :_handle_ptr])
         return :(function $jl_name($(input_fargs...))
             _handle_ptr = Ref{Ptr{Cvoid}}(C_NULL)
             _result = $cc
@@ -214,7 +231,7 @@ function rewriter(x::Expr)
         scalar_type = _extract_scalar_type(last_type)
         input_fargs = fargs[1:end-1]
         input_avals = avals[1:end-1]
-        cc = :(ccall($fname, $rettype, ($(atypes...),), $(input_avals...), _out_ref))
+        cc = call_expr(c_sym, fname, rettype, :(($(atypes...),)), [input_avals..., :_out_ref])
         return :(function $jl_name($(input_fargs...))
             _out_ref = Ref{$scalar_type}(zero($scalar_type))
             _result = $cc
@@ -223,7 +240,7 @@ function rewriter(x::Expr)
         end) |> prettify
     else
         # No auto-managed output — just call and check error
-        cc = :(ccall($fname, $rettype, $argtypes, $(argvalues...)))
+        cc = call_expr(c_sym, fname, rettype, argtypes, argvalues)
         return :(function $jl_name($(fargs...))
             _result = $cc
             check_error(_result)
@@ -401,6 +418,75 @@ function check_error(result::ZarrsResult)
         ccall((:zarrsFreeString, libzarrs_jl), Cvoid, (Ptr{UInt8},), msg_ptr)
     end
     error("zarrs error (\$result): \$msg")
+end
+
+# ---------------------------------------------------------------------------
+# Off-thread calls (refreshable credentials)
+#
+# Icechunk asks for refreshable credentials on Tokio threads, and Zarrs.jl answers them with an
+# ordinary Julia task (see `Zarrs.Icechunk.RefreshableCredentials`). That task can only run if the
+# Julia thread that made the FFI call is not blocked inside it. So once refreshable credentials
+# exist, every call that may block on I/O runs on a libuv worker thread while the calling task
+# yields. The worker thread is adopted by Julia to run the call wrapper, so the C call itself runs
+# in a GC-safe region: otherwise a garbage collection started by the credentials task would wait
+# forever for that worker. Before refreshable credentials exist, calls are plain `ccall`s.
+# ---------------------------------------------------------------------------
+
+"Set (never cleared) when refreshable credentials are first registered."
+const OFFLOAD_BLOCKING_CALLS = Threads.Atomic{Bool}(false)
+
+# At most UV_THREADPOOL_SIZE - 2 concurrent off-thread calls, so that libuv worker threads stay
+# free for DNS lookups and file I/O, which the credentials task may need.
+const OFFLOAD_LIMIT = Base.Semaphore(max(1, parse(Int, get(ENV, "UV_THREADPOOL_SIZE", "4")) - 2))
+
+\"\"\"
+    @gcsafe_threadcall((cfunc, clib), rettype, (argtypes...), argvals...)
+
+Like `Base.@threadcall`, but the C function runs in a GC-safe region (`@ccall gc_safe=true`), and
+concurrency is limited by `OFFLOAD_LIMIT`. The C function must not call back into Julia.
+\"\"\"
+macro gcsafe_threadcall(f, rettype, argtypes, argvals...)
+    isa(argtypes, Expr) && argtypes.head === :tuple || error("argument types must be a tuple")
+    length(argtypes.args) == length(argvals) || error("wrong number of arguments to C function")
+    f = esc(f)
+    rettype = esc(rettype)
+    argtypes = map(esc, argtypes.args)
+    argvals = map(esc, argvals)
+    wrapper = :(function (fptr::Ptr{Cvoid}, args_ptr::Ptr{Cvoid}, retval_ptr::Ptr{Cvoid})
+        p = args_ptr
+    end)
+    body = wrapper.args[2].args
+    typed = Expr[]
+    for (i, T) in enumerate(argtypes)
+        arg = Symbol("arg", i)
+        push!(body, :(\$arg = unsafe_load(convert(Ptr{\$T}, p))))
+        push!(body, :(p += Core.sizeof(\$T)))
+        push!(typed, :(\$arg::\$T))
+    end
+    call = Expr(:(::), Expr(:call, Expr(:\$, :fptr), typed...), rettype)
+    push!(body, :(ret = @ccall gc_safe = true \$call))
+    push!(body, :(unsafe_store!(convert(Ptr{\$rettype}, retval_ptr), ret)))
+    push!(body, :(return Int(Core.sizeof(\$rettype))))
+    wrapper = Expr(:var"hygienic-scope", wrapper, @__MODULE__, __source__)
+    return :(let fun_ptr = @cfunction(\$wrapper, Int, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}))
+        Base.acquire(OFFLOAD_LIMIT) do
+            Base.do_threadcall(fun_ptr, cglobal(\$f), \$rettype, Any[\$(argtypes...)], Any[\$(argvals...)])
+        end
+    end)
+end
+
+\"\"\"
+    @zarrs_ccall((cfunc, clib), rettype, (argtypes...), argvals...)
+
+A `ccall` that runs off-thread (`@gcsafe_threadcall`) once `OFFLOAD_BLOCKING_CALLS` is set.
+On Julia < 1.12 (no `@ccall gc_safe`), always a plain `ccall`; refreshable credentials then
+refuse to start (see `Zarrs.Icechunk.RefreshableCredentials`).
+\"\"\"
+macro zarrs_ccall(f, rettype, argtypes, argvals...)
+    plain = Expr(:call, :ccall, f, rettype, argtypes, argvals...)
+    VERSION < v"1.12-" && return esc(plain)
+    offloaded = Expr(:macrocall, Symbol("@gcsafe_threadcall"), __source__, f, rettype, argtypes, argvals...)
+    return esc(:(OFFLOAD_BLOCKING_CALLS[] ? \$offloaded : \$plain))
 end
 
 # ---------------------------------------------------------------------------

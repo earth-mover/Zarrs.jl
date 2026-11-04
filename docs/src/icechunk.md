@@ -69,6 +69,63 @@ storage = GCSStorage(bucket="b", prefix="p",
 storage = GCSStorage(bucket="b", prefix="p", credential_type=:anonymous)
 ```
 
+### Refreshable credentials
+
+Temporary credentials (AWS STS, OAuth tokens, credentials vended by a service such as
+Arraylake) expire. Pass a function instead of fixed keys, and icechunk calls it on first use and
+again shortly before the previous credentials expire:
+
+```julia
+using Dates
+
+creds = RefreshableCredentials() do
+    c = fetch_temporary_credentials()          # however you obtain them; may do HTTP
+    S3Credentials(c.access_key_id, c.secret_access_key;
+                  session_token=c.session_token,
+                  expires_after=c.expiration)  # a DateTime in UTC, or nothing
+end
+
+storage = S3Storage(bucket="my-bucket", prefix="repo", region="us-east-1", credentials=creds)
+repo = Repository(storage)
+```
+
+For Google Cloud Storage the function returns a `GCSBearerToken(token; expires_after=...)`:
+
+```julia
+storage = GCSStorage(bucket="my-bucket", prefix="repo",
+                     credentials=RefreshableCredentials(() -> GCSBearerToken(get_token())))
+```
+
+The function:
+- runs as an ordinary Julia task, so it may do HTTP requests, take locks and allocate;
+- must not call Zarrs itself;
+- if it throws, the operation that needed credentials fails with an error that includes the
+  exception message (the process is never affected);
+- has 120 s to answer by default (`set_credentials_timeout(seconds)` changes this);
+- cannot be used from another process (for example by a `Distributed` worker that received a
+  serialized repository).
+
+#### How it works
+
+icechunk asks for credentials from its Tokio worker threads. Calling Julia directly from those
+threads is not safe while the Julia thread that started the operation is blocked inside the
+library: a garbage collection waits for every Julia thread to reach a safepoint, including one
+blocked in a `ccall`, so it would wait forever; and the function could not do I/O, because the
+blocked thread is not running Julia's event loop. Instead:
+
+1. The Rust side queues the request and wakes Julia with `uv_async_send` (thread-safe and
+   independent of the Julia runtime).
+2. A Julia service task calls your function and posts the result back.
+3. So that the service task can run, once refreshable credentials exist Zarrs.jl runs every
+   blocking library call on a libuv worker thread while the calling task yields
+   (`LibZarrs.@zarrs_ccall`). The call runs in a GC-safe region (`@ccall gc_safe=true`), because
+   the worker thread is adopted by Julia and would otherwise block garbage collection. This works
+   with a single Julia thread.
+
+At most `UV_THREADPOOL_SIZE - 2` such calls run at once (2 by default), leaving libuv worker
+threads free for DNS lookups and file I/O that your function may need. Set the
+`UV_THREADPOOL_SIZE` environment variable before starting Julia to allow more.
+
 ### Azure Blob Storage
 
 ```julia

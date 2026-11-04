@@ -41,6 +41,11 @@ pub enum ZarrsResult {
 static LAST_ERROR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
 
 pub(crate) fn set_error(msg: String) {
+    #[cfg(feature = "icechunk")]
+    let msg = match credentials::take_failure() {
+        Some(failure) => format!("{msg}\n  caused by: {failure}"),
+        None => msg,
+    };
     *LAST_ERROR.lock().unwrap() = msg;
 }
 
@@ -1239,6 +1244,9 @@ pub unsafe extern "C" fn zarrsJlArrayEraseChunk(
 // Icechunk FFI — Repository/Session/Storage handles (separate file)
 #[cfg(feature = "icechunk")]
 mod icechunk;
+
+#[cfg(feature = "icechunk")]
+mod credentials;
 
 #[cfg(feature = "icechunk")]
 mod icechunk_adapter_impl {

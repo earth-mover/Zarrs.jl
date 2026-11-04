@@ -42,5 +42,6 @@ requested = ARGS
 
     if isempty(requested) || "icechunk" in requested
         include("test_icechunk.jl")
+        include("test_icechunk_credentials.jl")
     end
 end
