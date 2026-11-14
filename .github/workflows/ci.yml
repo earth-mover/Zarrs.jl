@@ -41,7 +41,7 @@ jobs:
 
       # Run core tests
       - name: Run tests
-        uses: julia-actions/julia-runtest@v1.12.0
+        uses: julia-actions/julia-runtest@v1.13.0
 
   test-icechunk:
     name: Icechunk tests
@@ -104,7 +104,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # Install uv for Python fixture generation
-      - uses: astral-sh/setup-uv@v10.3.1
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - name: Build libzarrs_jl
         run: julia --project deps/build.jl
